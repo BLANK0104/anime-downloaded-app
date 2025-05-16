@@ -18,6 +18,16 @@
         app:layout_constraintTop_toTopOf="parent"
         tools:text="Demon Slayer: Kimetsu no Yaiba" />
 
+    <Button
+        android:id="@+id/mode_toggle_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Download Mode"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"
+        app:layout_constraintTop_toBottomOf="@id/anime_title"
+        app:layout_constraintStart_toStartOf="parent" />
+
     <TextView
         android:id="@+id/total_episodes_text"
         android:layout_width="wrap_content"

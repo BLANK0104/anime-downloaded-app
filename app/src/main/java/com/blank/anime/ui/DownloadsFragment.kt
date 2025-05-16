@@ -371,10 +371,11 @@ class DownloadsFragment : Fragment() {
         }
     }
 
+    @OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun playVideo(localUri: String) {
         if (localUri.isNotEmpty()) {
             try {
-                // Convert file:// URI to content:// URI using FileProvider
+                // Parse the URI and get the file
                 val uri = Uri.parse(localUri)
                 val file = File(uri.path ?: "")
 
@@ -383,19 +384,27 @@ class DownloadsFragment : Fragment() {
                     return
                 }
 
-                // Generate content URI using FileProvider
+                // Extract episode title from the filename
+                val filename = file.name
+                val title = filename.substringBeforeLast('.').replace('_', ' ')
+
+                // Create a content URI using FileProvider
                 val contentUri = FileProvider.getUriForFile(
                     requireContext(),
                     "com.blank.anime.fileprovider",
                     file
                 )
 
-                // Create and start intent with content URI
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(contentUri, "video/*")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                startActivity(intent)
+                // Navigate to VideoPlayerFragment
+                val videoPlayerFragment = VideoPlayerFragment.newInstance(contentUri, title)
+
+                // Add as an overlay on top of current UI instead of replacing the NavHostFragment
+                requireActivity().supportFragmentManager
+                    .beginTransaction()
+                    .add(android.R.id.content, videoPlayerFragment)
+                    .addToBackStack("videoPlayer")
+                    .commit()
+
             } catch (e: Exception) {
                 Log.e("DownloadsFragment", "Error playing video", e)
                 Toast.makeText(

@@ -1,7 +1,6 @@
 package com.blank.anime.ui
 
 import android.app.AlertDialog
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -20,11 +19,11 @@ import com.blank.anime.databinding.FragmentAnimeDetailsBinding
 import com.blank.anime.repository.AnimeRepository
 import kotlinx.coroutines.launch
 import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.os.Environment
 import android.util.Log
+import androidx.media3.common.util.UnstableApi
 
 class AnimeDetailsFragment : Fragment() {
 
@@ -34,6 +33,7 @@ class AnimeDetailsFragment : Fragment() {
     private var animeId: String = ""
     private var animeTitle: String = ""
     private var totalEpisodes: Int = 0
+    private var isWatchMode = false // Default to download mode
 
     private lateinit var episodeAdapter: EpisodeAdapter
     private val animeRepository = AnimeRepository()
@@ -74,6 +74,17 @@ class AnimeDetailsFragment : Fragment() {
         // Set default episode range
         binding.startEpisodeInput.setText("1")
         binding.endEpisodeInput.setText(if (totalEpisodes > 5) "5" else totalEpisodes.toString())
+
+        // Initialize mode toggle button
+        updateModeButton()
+    }
+
+    private fun updateModeButton() {
+        binding.modeToggleButton.text = if (isWatchMode) "Switch to Download Mode" else "Switch to Watch Mode"
+        binding.modeToggleButton.setCompoundDrawablesWithIntrinsicBounds(
+            if (isWatchMode) R.drawable.ic_download else R.drawable.ic_download,
+            0, 0, 0
+        )
     }
 
     private fun setupRecyclerView() {
@@ -88,6 +99,13 @@ class AnimeDetailsFragment : Fragment() {
     private fun setupListeners() {
         binding.loadEpisodesButton.setOnClickListener {
             loadEpisodes()
+        }
+
+        binding.modeToggleButton.setOnClickListener {
+            isWatchMode = !isWatchMode
+            updateModeButton()
+            // Update adapter to refresh buttons
+            episodeAdapter.notifyDataSetChanged()
         }
     }
 
@@ -150,6 +168,163 @@ class AnimeDetailsFragment : Fragment() {
             Toast.makeText(requireContext(), "Permission granted, you can download now", Toast.LENGTH_SHORT).show()
         } else {
             Toast.makeText(requireContext(), "Storage permission required for downloads", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun handleEpisodeAction(episode: Episode) {
+        if (isWatchMode) {
+            streamEpisode(episode)
+        } else {
+            downloadEpisode(episode)
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun streamEpisode(episode: Episode) {
+        // Create quality and language selection dialogs
+        val qualities = arrayOf("360p", "480p", "720p", "1080p")
+        val languages = arrayOf("English", "Japanese")
+
+        AlertDialog.Builder(requireContext())
+            .setTitle("Select Language")
+            .setItems(languages) { _, langIndex ->
+                val lang = if (langIndex == 0) "eng" else "jpn"
+
+                AlertDialog.Builder(requireContext())
+                    .setTitle("Select Quality")
+                    .setItems(qualities) { _, qualityIndex ->
+                        val quality = when (qualityIndex) {
+                            0 -> 360
+                            1 -> 480
+                            2 -> 720
+                            else -> 1080
+                        }
+
+                        val progressDialog = android.app.ProgressDialog(requireContext()).apply {
+                            setMessage("Preparing stream...")
+                            setCancelable(false)
+                            show()
+                        }
+
+                        lifecycleScope.launch {
+                            try {
+                                val response = animeRepository.getDownloadLink(
+                                    animeId = animeId,
+                                    episodeNum = episode.number,
+                                    lang = lang,
+                                    quality = quality,
+                                    animeTitle = animeTitle
+                                )
+
+                                progressDialog.dismiss()
+
+                                if (response.download_link.isNotEmpty()) {
+                                    // Launch video player with the stream URL
+                                    val episodeTitle = "$animeTitle - Episode ${episode.number}"
+                                    val videoPlayerFragment = VideoPlayerFragment.newInstance(
+                                        Uri.parse(response.download_link),
+                                        episodeTitle
+                                    )
+
+                                    // Add as an overlay on top of current UI
+                                    requireActivity().supportFragmentManager
+                                        .beginTransaction()
+                                        .add(android.R.id.content, videoPlayerFragment)
+                                        .addToBackStack("videoPlayer")
+                                        .commit()
+                                } else {
+                                    Toast.makeText(
+                                        requireContext(),
+                                        "No stream available: ${response.message}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            } catch (e: retrofit2.HttpException) {
+                                progressDialog.dismiss()
+                                // Try fallback method
+                                getStreamLinkFromEpisodesApi(episode, lang, quality)
+                            } catch (e: Exception) {
+                                progressDialog.dismiss()
+                                Toast.makeText(
+                                    requireContext(),
+                                    "Error: ${e.message ?: "Unknown error"}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun getStreamLinkFromEpisodesApi(episode: Episode, lang: String, quality: Int) {
+        val progressDialog = android.app.ProgressDialog(requireContext()).apply {
+            setMessage("Trying alternative stream method...")
+            setCancelable(false)
+            show()
+        }
+
+        lifecycleScope.launch {
+            try {
+                val response = animeRepository.getEpisodes(
+                    animeId = animeId,
+                    startEpisode = episode.number,
+                    endEpisode = episode.number
+                )
+
+                progressDialog.dismiss()
+
+                // Extract the link from the nested structure
+                val episodeStr = episode.number.toString()
+                val qualityStr = quality.toString()
+
+                if (response.episodes.containsKey(episodeStr) &&
+                    response.episodes[episodeStr]?.containsKey(lang) == true &&
+                    response.episodes[episodeStr]?.get(lang)?.containsKey(qualityStr) == true) {
+
+                    val links = response.episodes[episodeStr]?.get(lang)?.get(qualityStr)
+
+                    if (links != null && links.isNotEmpty()) {
+                        // Launch video player with the stream URL
+                        val episodeTitle = "$animeTitle - Episode ${episode.number}"
+                        val videoPlayerFragment = VideoPlayerFragment.newInstance(
+                            Uri.parse(links[0]),
+                            episodeTitle
+                        )
+
+                        // Add as an overlay on top of current UI
+                        requireActivity().supportFragmentManager
+                            .beginTransaction()
+                            .add(android.R.id.content, videoPlayerFragment)
+                            .addToBackStack("videoPlayer")
+                            .commit()
+                    } else {
+                        Toast.makeText(
+                            requireContext(),
+                            "No stream available for this quality/language",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } else {
+                    Toast.makeText(
+                        requireContext(),
+                        "No stream available for Episode $episodeStr ($lang, ${quality}p)",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } catch (e: Exception) {
+                progressDialog.dismiss()
+                Toast.makeText(
+                    requireContext(),
+                    "Error: ${e.message ?: "Unknown error"}",
+                    Toast.LENGTH_LONG
+                ).show()
+                e.printStackTrace()
+            }
         }
     }
 
@@ -238,8 +413,7 @@ class AnimeDetailsFragment : Fragment() {
             .show()
     }
 
-    // Extracted download method for better organization
-// Improved download method in AnimeDetailsFragment.kt
+    // Improved download method in AnimeDetailsFragment.kt
     private fun startDownload(url: String, episodeNum: Int, lang: String, quality: Int) {
         try {
             val downloadManager = requireContext().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
@@ -394,14 +568,21 @@ class AnimeDetailsFragment : Fragment() {
         inner class EpisodeViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
             private val titleView: TextView = itemView.findViewById(R.id.episode_title)
             private val descriptionView: TextView = itemView.findViewById(R.id.episode_description)
-            private val downloadButton: Button = itemView.findViewById(R.id.download_button)
+            private val actionButton: Button = itemView.findViewById(R.id.download_button)
 
             fun bind(episode: Episode) {
                 titleView.text = episode.title
                 descriptionView.text = episode.description
 
-                downloadButton.setOnClickListener {
-                    downloadEpisode(episode)
+                // Update button text based on current mode
+                actionButton.text = if (isWatchMode) "Watch" else "Download"
+                actionButton.setCompoundDrawablesWithIntrinsicBounds(
+                    if (isWatchMode) R.drawable.ic_download else R.drawable.ic_download,
+                    0, 0, 0
+                )
+
+                actionButton.setOnClickListener {
+                    handleEpisodeAction(episode)
                 }
             }
         }
