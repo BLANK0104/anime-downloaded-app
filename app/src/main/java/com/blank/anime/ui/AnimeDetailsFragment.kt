@@ -19,7 +19,9 @@ import com.blank.anime.databinding.FragmentAnimeDetailsBinding
 import com.blank.anime.repository.AnimeRepository
 import kotlinx.coroutines.launch
 import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
 import android.os.Environment
 import android.util.Log
@@ -629,19 +631,16 @@ class AnimeDetailsFragment : Fragment() {
             val safeTitle = animeTitle.replace("[^a-zA-Z0-9]".toRegex(), "_")
             val fileName = "${safeTitle}_E${episodeNum}_${lang}_${quality}p.mp4"
 
-            // Create request with proper user agent and referrer headers
+            // Create request with minimal settings to avoid issues
             val request = DownloadManager.Request(Uri.parse(url)).apply {
-                // Add headers that streaming sites require
+                // Use only essential headers
                 addRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-                addRequestHeader("Referer", "https://anime-downloader-six.vercel.app/")
-                addRequestHeader("Accept", "video/mp4,video/*,*/*")
-                addRequestHeader("Range", "bytes=0-")
 
                 // Set title and description for notification
                 setTitle("${animeTitle} - Episode ${episodeNum}")
                 setDescription("${lang.uppercase()}, ${quality}p")
 
-                // Set proper MIME type
+                // Set MIME type
                 setMimeType("video/mp4")
 
                 // Make download visible in UI
@@ -650,7 +649,7 @@ class AnimeDetailsFragment : Fragment() {
                 // Media scanner visibility
                 allowScanningByMediaScanner()
 
-                // Set destination
+                // Set destination - use Downloads directory
                 setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
 
                 // Allow network types
@@ -665,16 +664,79 @@ class AnimeDetailsFragment : Fragment() {
             // Show toast message
             Toast.makeText(
                 requireContext(),
-                "Download started. Check notification area and Downloads app.",
+                "Download started for Episode $episodeNum. Check notification area.",
                 Toast.LENGTH_LONG
             ).show()
 
-            // Register receiver for download completion (optional)
-            val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            // Your existing broadcast receiver code if needed...
+            // On Android 13+ we need to specify export flags for receivers
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                requireContext().registerReceiver(
+                    object : BroadcastReceiver() {
+                        override fun onReceive(context: Context?, intent: Intent?) {
+                            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                            if (id == downloadId) {
+                                // Check download status
+                                val query = DownloadManager.Query().setFilterById(downloadId)
+                                val cursor = downloadManager.query(query)
+
+                                if (cursor.moveToFirst()) {
+                                    val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                                    if (statusIndex >= 0) {
+                                        val status = cursor.getInt(statusIndex)
+                                        when (status) {
+                                            DownloadManager.STATUS_SUCCESSFUL ->
+                                                Toast.makeText(context, "Download completed for Episode $episodeNum", Toast.LENGTH_SHORT).show()
+                                            DownloadManager.STATUS_FAILED -> {
+                                                val reasonIndex = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
+                                                val reason = if (reasonIndex >= 0) cursor.getInt(reasonIndex) else 0
+                                                Toast.makeText(context, "Download failed: ${getDownloadErrorReason(reason)}", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                }
+                                cursor.close()
+                                context?.unregisterReceiver(this)
+                            }
+                        }
+                    },
+                    IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                    Context.RECEIVER_NOT_EXPORTED
+                )
+            } else {
+                // Older Android versions don't need the export flag
+                requireContext().registerReceiver(
+                    object : BroadcastReceiver() {
+                        override fun onReceive(context: Context?, intent: Intent?) {
+                            // Same implementation as above
+                            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                            if (id == downloadId) {
+                                context?.unregisterReceiver(this)
+                            }
+                        }
+                    },
+                    IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+                )
+            }
+
         } catch (e: Exception) {
             Log.e("DownloadDebug", "Download error", e)
             Toast.makeText(requireContext(), "Download error: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Helper function to translate download error codes to human-readable messages
+    private fun getDownloadErrorReason(reason: Int): String {
+        return when(reason) {
+            DownloadManager.ERROR_CANNOT_RESUME -> "Cannot resume download"
+            DownloadManager.ERROR_DEVICE_NOT_FOUND -> "Storage device not found"
+            DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "File already exists"
+            DownloadManager.ERROR_FILE_ERROR -> "File error"
+            DownloadManager.ERROR_HTTP_DATA_ERROR -> "HTTP data error"
+            DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Insufficient storage space"
+            DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "Too many redirects"
+            DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "Unhandled HTTP code"
+            DownloadManager.ERROR_UNKNOWN -> "Unknown error"
+            else -> "Error code: $reason"
         }
     }
 
