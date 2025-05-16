@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/searchFragment">
+
+    <fragment
+        android:id="@+id/searchFragment"
+        android:name="com.blank.anime.ui.SearchFragment"
+        android:label="Search Anime"
+        tools:layout="@layout/fragment_search">
+        <action
+            android:id="@+id/action_searchFragment_to_animeDetailsFragment"
+            app:destination="@id/animeDetailsFragment" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/animeDetailsFragment"
+        android:name="com.blank.anime.ui.AnimeDetailsFragment"
+        android:label="Anime Details"
+        tools:layout="@layout/fragment_anime_details">
+        <argument
+            android:name="session_id"
+            app:argType="string" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/downloadsFragment"
+        android:name="com.blank.anime.ui.DownloadsFragment"
+        android:label="Downloads"
+        tools:layout="@layout/fragment_downloads" />
+</navigation>
