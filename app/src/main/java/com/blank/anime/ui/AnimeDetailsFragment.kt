@@ -563,16 +563,14 @@ class AnimeDetailsFragment : Fragment() {
         var failCount = 0
 
         // Show bulk download status
-        binding.bulkDownloadStatus.apply {
-            text = "Bulk download in progress... (0/${episodes.size})"
-            visibility = View.VISIBLE
-            setOnClickListener {
-                AlertDialog.Builder(requireContext())
-                    .setTitle("Bulk Download Progress")
-                    .setMessage("Downloading episodes...\n\nSuccess: $successCount\nFailed: $failCount")
-                    .setPositiveButton("OK", null)
-                    .show()
-            }
+        binding.bulkDownloadStatus.visibility = View.VISIBLE
+        binding.bulkDownloadStatusText.text = "Bulk download in progress... (0/${episodes.size})"
+        binding.bulkDownloadStatus.setOnClickListener {
+            AlertDialog.Builder(requireContext())
+                .setTitle("Bulk Download Progress")
+                .setMessage("Downloading episodes...\n\nSuccess: $successCount\nFailed: $failCount")
+                .setPositiveButton("OK", null)
+                .show()
         }
 
         lifecycleScope.launch {
@@ -583,7 +581,7 @@ class AnimeDetailsFragment : Fragment() {
                 while (attempt < 3 && !downloadSuccess) { // Retry up to 3 times
                     try {
                         // Update status text
-                        binding.bulkDownloadStatus.text = "Bulk download in progress... (${index + 1}/${episodes.size})"
+                        binding.bulkDownloadStatusText.text = "Bulk download in progress... (${index + 1}/${episodes.size})"
 
                         // Simulate download process
                         val response = animeRepository.getDownloadLink(
@@ -622,6 +620,7 @@ class AnimeDetailsFragment : Fragment() {
             ).show()
         }
     }
+
     private fun startDownload(url: String, episodeNum: Int, lang: String, quality: Int) {
         try {
             val downloadManager = requireContext().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
