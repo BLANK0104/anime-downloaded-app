@@ -553,29 +553,39 @@ class AnimeDetailsFragment : Fragment() {
         }
     }
 
+    private var isBulkDownloadInProgress = false
+
     private fun processBulkDownload(lang: String, quality: Int) {
         val episodes = episodeAdapter.getEpisodes()
 
-        // Progress dialog for bulk download
-        val progressDialog = android.app.ProgressDialog(requireContext()).apply {
-            setMessage("Starting bulk download (0/${episodes.size} episodes)...")
-            setCancelable(false)
-            show()
-        }
-
-        // Counter for successful downloads
+        // Counters for successful and failed downloads
         var successCount = 0
         var failCount = 0
 
-        // Launch coroutine to process all episodes
+        // Show bulk download status
+        binding.bulkDownloadStatus.apply {
+            text = "Bulk download in progress... (0/${episodes.size})"
+            visibility = View.VISIBLE
+            setOnClickListener {
+                AlertDialog.Builder(requireContext())
+                    .setTitle("Bulk Download Progress")
+                    .setMessage("Downloading episodes...\n\nSuccess: $successCount\nFailed: $failCount")
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+
         lifecycleScope.launch {
             episodes.forEachIndexed { index, episode ->
-                try {
-                    // Update progress message
-                    progressDialog.setMessage("Processing episode ${episode.number} (${index+1}/${episodes.size})...")
+                var attempt = 0
+                var downloadSuccess = false
 
-                    // Get download link using the download API
+                while (attempt < 3 && !downloadSuccess) { // Retry up to 3 times
                     try {
+                        // Update status text
+                        binding.bulkDownloadStatus.text = "Bulk download in progress... (${index + 1}/${episodes.size})"
+
+                        // Simulate download process
                         val response = animeRepository.getDownloadLink(
                             animeId = animeId,
                             episodeNum = episode.number,
@@ -585,41 +595,33 @@ class AnimeDetailsFragment : Fragment() {
                         )
 
                         if (response.download_link.isNotEmpty()) {
-                            // Start download with the link
-                            startDownload(
-                                url = response.download_link,
-                                episodeNum = episode.number,
-                                lang = lang,
-                                quality = quality
-                            )
+                            startDownload(response.download_link, episode.number, lang, quality)
                             successCount++
+                            downloadSuccess = true
                         } else {
-                            failCount++
-                            Log.e("DownloadDebug", "Empty download link received for episode ${episode.number}")
+                            throw Exception("Empty download link")
                         }
+
+                        kotlinx.coroutines.delay(2000) // Increased delay between downloads
                     } catch (e: Exception) {
-                        failCount++
-                        Log.e("DownloadDebug", "Error getting download link for episode ${episode.number}", e)
+                        attempt++
+                        if (attempt == 3) {
+                            failCount++
+                            Log.e("DownloadDebug", "Failed to download episode ${episode.number} after 3 attempts", e)
+                        }
                     }
-                } catch (e: Exception) {
-                    failCount++
-                    Log.e("DownloadDebug", "Error processing episode ${episode.number}", e)
                 }
             }
 
-            // Dismiss progress dialog when done
-            progressDialog.dismiss()
-
-            // Show completion message
+            // Hide status and show completion message
+            binding.bulkDownloadStatus.visibility = View.GONE
             Toast.makeText(
                 requireContext(),
-                "Bulk download: $successCount episodes queued, $failCount failed",
+                "Bulk download completed: $successCount success, $failCount failed",
                 Toast.LENGTH_LONG
             ).show()
         }
     }
-
-    // Improved download method in AnimeDetailsFragment.kt
     private fun startDownload(url: String, episodeNum: Int, lang: String, quality: Int) {
         try {
             val downloadManager = requireContext().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
@@ -661,66 +663,75 @@ class AnimeDetailsFragment : Fragment() {
             val downloadId = downloadManager.enqueue(request)
             Log.d("DownloadDebug", "Download ID: $downloadId")
 
-            // Show toast message
-            Toast.makeText(
-                requireContext(),
-                "Download started for Episode $episodeNum. Check notification area.",
-                Toast.LENGTH_LONG
-            ).show()
-
-            // On Android 13+ we need to specify export flags for receivers
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                requireContext().registerReceiver(
-                    object : BroadcastReceiver() {
-                        override fun onReceive(context: Context?, intent: Intent?) {
-                            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                            if (id == downloadId) {
-                                // Check download status
-                                val query = DownloadManager.Query().setFilterById(downloadId)
-                                val cursor = downloadManager.query(query)
-
-                                if (cursor.moveToFirst()) {
-                                    val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                                    if (statusIndex >= 0) {
-                                        val status = cursor.getInt(statusIndex)
-                                        when (status) {
-                                            DownloadManager.STATUS_SUCCESSFUL ->
-                                                Toast.makeText(context, "Download completed for Episode $episodeNum", Toast.LENGTH_SHORT).show()
-                                            DownloadManager.STATUS_FAILED -> {
-                                                val reasonIndex = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
-                                                val reason = if (reasonIndex >= 0) cursor.getInt(reasonIndex) else 0
-                                                Toast.makeText(context, "Download failed: ${getDownloadErrorReason(reason)}", Toast.LENGTH_LONG).show()
-                                            }
-                                        }
-                                    }
-                                }
-                                cursor.close()
-                                context?.unregisterReceiver(this)
-                            }
-                        }
-                    },
-                    IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-                    Context.RECEIVER_NOT_EXPORTED
-                )
-            } else {
-                // Older Android versions don't need the export flag
-                requireContext().registerReceiver(
-                    object : BroadcastReceiver() {
-                        override fun onReceive(context: Context?, intent: Intent?) {
-                            // Same implementation as above
-                            val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                            if (id == downloadId) {
-                                context?.unregisterReceiver(this)
-                            }
-                        }
-                    },
-                    IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-                )
+            // Show toast message only for individual downloads
+            if (!isBulkDownloadInProgress) {
+                Toast.makeText(
+                    requireContext(),
+                    "Download started for Episode $episodeNum. Check notification area.",
+                    Toast.LENGTH_LONG
+                ).show()
             }
+
+            // Register broadcast receiver
+            registerDownloadCompletionReceiver(downloadId, episodeNum)
 
         } catch (e: Exception) {
             Log.e("DownloadDebug", "Download error", e)
-            Toast.makeText(requireContext(), "Download error: ${e.message}", Toast.LENGTH_LONG).show()
+            if (!isBulkDownloadInProgress) {
+                Toast.makeText(requireContext(), "Download error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun registerDownloadCompletionReceiver(downloadId: Long, episodeNum: Int) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                if (id == downloadId) {
+                    // Check download status
+                    val downloadManager = context?.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                    if (downloadManager != null) {
+                        val query = DownloadManager.Query().setFilterById(downloadId)
+                        val cursor = downloadManager.query(query)
+
+                        if (cursor.moveToFirst()) {
+                            val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                            if (statusIndex >= 0) {
+                                val status = cursor.getInt(statusIndex)
+                                when (status) {
+                                    DownloadManager.STATUS_SUCCESSFUL ->
+                                        if (!isBulkDownloadInProgress) {
+                                            Toast.makeText(context, "Download completed for Episode $episodeNum", Toast.LENGTH_SHORT).show()
+                                        }
+                                    DownloadManager.STATUS_FAILED -> {
+                                        val reasonIndex = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
+                                        val reason = if (reasonIndex >= 0) cursor.getInt(reasonIndex) else 0
+                                        if (!isBulkDownloadInProgress) {
+                                            Toast.makeText(context, "Download failed: ${getDownloadErrorReason(reason)}", Toast.LENGTH_LONG).show()
+                                        }
+                                        Log.e("DownloadDebug", "Download failed for Episode $episodeNum: ${getDownloadErrorReason(reason)}")
+                                    }
+                                }
+                            }
+                        }
+                        cursor.close()
+                    }
+                    context?.unregisterReceiver(this)
+                }
+            }
+        }
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            requireContext().registerReceiver(
+                receiver,
+                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            requireContext().registerReceiver(
+                receiver,
+                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+            )
         }
     }
 
