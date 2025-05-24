@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.*
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -47,12 +48,22 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     private val controlsHideHandler = Handler(Looper.getMainLooper())
 
     // Constants for gestures
-    private val SEEK_AMOUNT_DOUBLE_TAP = 10000L // 10 seconds
-    private val SEEK_AMOUNT_SKIP_BUTTON = 85000L // 1 minute 25 seconds
+    private val SEEK_AMOUNT_DOUBLE_TAP = 5000L // 5 seconds
+    private val SEEK_AMOUNT_SKIP_BUTTON = 5000L // 5 seconds
+    private val SEEK_AMOUNT_LONG_SKIP = 85000L // 85 seconds
 
     // Variables for brightness and volume control
     private var lastBrightnessY = 0f
     private var lastVolumeY = 0f
+
+    // Progress tracking
+    private val progressHandler = Handler(Looper.getMainLooper())
+    private val progressRunnable = object : Runnable {
+        override fun run() {
+            updateProgressBar()
+            progressHandler.postDelayed(this, 1000)
+        }
+    }
 
     companion object {
         private const val ARG_VIDEO_URI = "video_uri"
@@ -96,7 +107,7 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             originalBrightness = Settings.System.getFloat(
                 requireContext().contentResolver,
                 Settings.System.SCREEN_BRIGHTNESS
-            )
+            ) / 255f  // Normalize to 0-1 range
         } catch (e: Exception) {
             originalBrightness = 0.5f
         }
@@ -134,12 +145,37 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             requireActivity().supportFragmentManager.popBackStack()
         }
 
+        // Set play/pause button click listener
+        binding.playPauseButton.setOnClickListener {
+            togglePlayback()
+        }
+
+        // Set rewind button click listener
+        binding.rewindButton.setOnClickListener {
+            player?.let {
+                val newPosition = (it.currentPosition - SEEK_AMOUNT_SKIP_BUTTON).coerceAtLeast(0)
+                it.seekTo(newPosition)
+                showToast("⏪ 5 seconds")
+            }
+        }
+
         // Set skip button click listener
         binding.skipForwardButton.setOnClickListener {
             player?.let {
-                val newPosition = it.currentPosition + SEEK_AMOUNT_SKIP_BUTTON
+                val newPosition = (it.currentPosition + SEEK_AMOUNT_SKIP_BUTTON)
+                    .coerceAtMost(it.duration)
                 it.seekTo(newPosition)
-                showToast("Skip forward 1:25")
+                showToast("⏩ 5 seconds")
+            }
+        }
+
+        // Set long skip button (85 seconds) click listener
+        binding.longSkipButton.setOnClickListener {
+            player?.let {
+                val newPosition = (it.currentPosition + SEEK_AMOUNT_LONG_SKIP)
+                    .coerceAtMost(it.duration)
+                it.seekTo(newPosition)
+                showToast("⏩ 85 seconds")
             }
         }
 
@@ -155,6 +191,30 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             }
         }
 
+        // Set up seekbar listener
+        binding.seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    player?.let {
+                        val newPosition = progress.toLong() * it.duration / 100
+                        binding.currentTime.text = formatTime(newPosition)
+                    }
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) {
+                cancelHideControlsTask()
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                player?.let {
+                    val newPosition = seekBar.progress.toLong() * it.duration / 100
+                    it.seekTo(newPosition)
+                }
+                scheduleHideControls()
+            }
+        })
+
         // Schedule initial hiding of controls
         scheduleHideControls()
     }
@@ -167,16 +227,26 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     override fun onResume() {
         super.onResume()
         hideSystemUI() // Ensure system UI stays hidden when returning to the fragment
+        if (player != null) {
+            startProgressUpdates()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopProgressUpdates()
     }
 
     override fun onStop() {
         super.onStop()
+        stopProgressUpdates()
         releasePlayer()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
         cancelHideControlsTask() // Cancel pending hide controls tasks
+        stopProgressUpdates()
         showSystemUI() // Restore system UI
         _binding = null
     }
@@ -213,12 +283,23 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
                 exoPlayer.seekTo(playbackPosition)
                 exoPlayer.prepare()
 
-                // Add a listener to auto-hide controls when playback starts
+                // Start progress updates
+                startProgressUpdates()
+
+                // Add a listener to update play/pause button and controls
                 exoPlayer.addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
                         if (state == Player.STATE_READY) {
-                            hideControls()
+                            updateProgressBar()
                         }
+                    }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        // Update play/pause button icon
+                        binding.playPauseButton.setImageResource(
+                            if (isPlaying) android.R.drawable.ic_media_pause
+                            else android.R.drawable.ic_media_play
+                        )
                     }
                 })
             }
@@ -231,6 +312,55 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             exoPlayer.release()
         }
         player = null
+    }
+
+    // Toggle play/pause
+    private fun togglePlayback() {
+        player?.let {
+            if (it.isPlaying) {
+                it.pause()
+                binding.playPauseButton.setImageResource(android.R.drawable.ic_media_play)
+            } else {
+                it.play()
+                binding.playPauseButton.setImageResource(android.R.drawable.ic_media_pause)
+            }
+        }
+    }
+
+    // Progress tracking methods
+    private fun startProgressUpdates() {
+        stopProgressUpdates() // Ensure no duplicate runnables
+        progressHandler.post(progressRunnable)
+    }
+
+    private fun stopProgressUpdates() {
+        progressHandler.removeCallbacks(progressRunnable)
+    }
+
+    private fun updateProgressBar() {
+        player?.let {
+            if (it.duration > 0) {
+                val position = it.currentPosition
+                val duration = it.duration
+                val progress = ((position * 100) / duration).toInt()
+
+                binding.seekBar.progress = progress
+                binding.currentTime.text = formatTime(position)
+                binding.totalTime.text = formatTime(duration)
+            }
+        }
+    }
+
+    private fun formatTime(millis: Long): String {
+        val hours = millis / (1000 * 60 * 60)
+        val minutes = (millis % (1000 * 60 * 60)) / (1000 * 60)
+        val seconds = (millis % (1000 * 60)) / 1000
+
+        return if (hours > 0) {
+            String.format("%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format("%02d:%02d", minutes, seconds)
+        }
     }
 
     // System UI visibility control
@@ -260,21 +390,25 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
 
     // Controls visibility management
     private fun showControls() {
-        if (_binding == null) return // Check if binding is null
+        if (_binding == null) return
         binding.controlsContainer.visibility = View.VISIBLE
-        binding.seekButtons.visibility = View.VISIBLE
+        binding.seekControls.visibility = View.VISIBLE
+        binding.progressContainer.visibility = View.VISIBLE
+        binding.playPauseButton.visibility = View.VISIBLE
         controlsVisible = true
     }
 
     private fun hideControls() {
-        if (_binding == null) return // Check if binding is null
+        if (_binding == null) return
         binding.controlsContainer.visibility = View.GONE
-        binding.seekButtons.visibility = View.GONE
+        binding.seekControls.visibility = View.GONE
+        binding.progressContainer.visibility = View.GONE
+        binding.playPauseButton.visibility = View.GONE
         controlsVisible = false
     }
 
     private fun toggleControls() {
-        if (_binding == null) return // Check if binding is null
+        if (_binding == null) return
         if (controlsVisible) {
             hideControls()
         } else {
@@ -300,25 +434,31 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     // Touch handling
     override fun onTouch(v: View, event: MotionEvent): Boolean {
         // Let the gesture detector process the event first
-        gestureDetector.onTouchEvent(event)
+        val gestureResult = gestureDetector.onTouchEvent(event)
 
         // Handle vertical swipes for brightness and volume
         when (v.id) {
             R.id.brightness_control_area -> {
-                if (event.action == MotionEvent.ACTION_MOVE) {
+                if (event.action == MotionEvent.ACTION_DOWN) {
+                    lastBrightnessY = event.y
+                }
+                else if (event.action == MotionEvent.ACTION_MOVE) {
                     handleBrightnessChange(event)
                 }
-                if (event.action == MotionEvent.ACTION_UP) {
+                else if (event.action == MotionEvent.ACTION_UP) {
                     lastBrightnessY = 0f
                     binding.brightnessIndicator.visibility = View.GONE
                 }
                 return true
             }
             R.id.volume_control_area -> {
-                if (event.action == MotionEvent.ACTION_MOVE) {
+                if (event.action == MotionEvent.ACTION_DOWN) {
+                    lastVolumeY = event.y
+                }
+                else if (event.action == MotionEvent.ACTION_MOVE) {
                     handleVolumeChange(event)
                 }
-                if (event.action == MotionEvent.ACTION_UP) {
+                else if (event.action == MotionEvent.ACTION_UP) {
                     lastVolumeY = 0f
                     binding.volumeIndicator.visibility = View.GONE
                 }
@@ -337,12 +477,12 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             }
         }
 
-        return false
+        return gestureResult
     }
 
     // Brightness control
     private fun handleBrightnessChange(event: MotionEvent) {
-        if (_binding == null) return // Check if binding is null
+        if (_binding == null) return
 
         if (lastBrightnessY == 0f) {
             lastBrightnessY = event.y
@@ -351,20 +491,20 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
 
         val screenHeight = resources.displayMetrics.heightPixels
         val deltaY = lastBrightnessY - event.y
-        val deltaPercent = deltaY / screenHeight
+        val deltaPercent = deltaY / screenHeight * 0.5f  // Make adjustment less sensitive
 
         try {
-            // Get current brightness
-            var brightness = Settings.System.getFloat(
-                requireContext().contentResolver,
-                Settings.System.SCREEN_BRIGHTNESS
-            ) / 255f
+            // Get window brightness instead of system brightness
+            val window = requireActivity().window
+            var brightness = window.attributes.screenBrightness
+
+            // If brightness is unset (-1), use a default value
+            if (brightness < 0) brightness = 0.5f
 
             // Adjust brightness by the delta (normalize to 0.0 - 1.0 range)
             brightness = (brightness + deltaPercent).coerceIn(0.01f, 1.0f)
 
             // Set brightness
-            val window = requireActivity().window
             val layoutParams = window.attributes
             layoutParams.screenBrightness = brightness
             window.attributes = layoutParams
@@ -378,12 +518,13 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             lastBrightnessY = event.y
         } catch (e: Exception) {
             // Ignore brightness control errors
+            e.printStackTrace()
         }
     }
 
     // Volume control
     private fun handleVolumeChange(event: MotionEvent) {
-        if (_binding == null) return // Check if binding is null
+        if (_binding == null) return
 
         if (lastVolumeY == 0f) {
             lastVolumeY = event.y
@@ -424,7 +565,7 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     }
 
     override fun onDoubleTap(e: MotionEvent): Boolean {
-        if (_binding == null) return false // Check if binding is null
+        if (_binding == null) return false
 
         // Get the X position relative to screen width
         val screenWidth = resources.displayMetrics.widthPixels
@@ -435,14 +576,14 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             if (xPosition < screenWidth / 2) {
                 val newPosition = (it.currentPosition - SEEK_AMOUNT_DOUBLE_TAP).coerceAtLeast(0)
                 it.seekTo(newPosition)
-                showToast("⏪ 10 seconds")
+                showToast("⏪ 5 seconds")
             }
             // If double tap on the right side, seek forward
             else {
                 val newPosition = (it.currentPosition + SEEK_AMOUNT_DOUBLE_TAP)
                     .coerceAtMost(it.duration)
                 it.seekTo(newPosition)
-                showToast("⏩ 10 seconds")
+                showToast("⏩ 5 seconds")
             }
         }
 
