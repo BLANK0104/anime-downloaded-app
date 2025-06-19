@@ -8,4 +8,8 @@
         android:id="@+id/downloadsFragment"
         android:icon="@android:drawable/ic_menu_save"
         android:title="Downloads" />
+    <item
+        android:id="@+id/settingsFragment"
+        android:icon="@android:drawable/ic_menu_preferences"
+        android:title="Settings" />
 </menu>

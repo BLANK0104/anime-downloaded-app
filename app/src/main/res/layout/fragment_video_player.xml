@@ -104,10 +104,20 @@
         app:layout_constraintStart_toStartOf="parent">
 
         <ImageButton
+            android:id="@+id/previous_episode_button"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginEnd="16dp"
+            android:background="@drawable/circle_button_background"
+            android:contentDescription="Previous Episode"
+            android:src="@android:drawable/ic_media_previous"
+            app:tint="@android:color/white" />
+
+        <ImageButton
             android:id="@+id/rewind_button"
             android:layout_width="56dp"
             android:layout_height="56dp"
-            android:layout_marginEnd="32dp"
+            android:layout_marginEnd="16dp"
             android:background="@drawable/circle_button_background"
             android:contentDescription="Rewind 5 seconds"
             android:src="@android:drawable/ic_media_rew"
@@ -127,10 +137,20 @@
             android:id="@+id/skip_forward_button"
             android:layout_width="56dp"
             android:layout_height="56dp"
-            android:layout_marginStart="32dp"
+            android:layout_marginStart="16dp"
             android:background="@drawable/circle_button_background"
             android:contentDescription="Skip forward 5 seconds"
             android:src="@android:drawable/ic_media_ff"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/next_episode_button"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginStart="16dp"
+            android:background="@drawable/circle_button_background"
+            android:contentDescription="Next Episode"
+            android:src="@android:drawable/ic_media_next"
             app:tint="@android:color/white" />
     </LinearLayout>
 

@@ -1,19 +1,33 @@
 package com.blank.anime
 
+import android.net.Uri
 import android.os.Bundle
+import android.util.Log
+import android.content.Intent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
+import androidx.media3.common.util.UnstableApi
 import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.setupWithNavController
+import com.blank.anime.ui.StoragePermissionDialog
+import com.blank.anime.ui.VideoPlayerFragment
+import com.blank.anime.ui.WelcomeDialog
+import com.blank.anime.utils.StorageManager
 import com.blank.anime.viewmodel.AnimeViewModel
+import com.blank.anime.viewmodel.AniListViewModel
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.snackbar.Snackbar
+import android.widget.Toast
 
-class MainActivity : AppCompatActivity() {
+@UnstableApi
+class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationListener {
 
     lateinit var viewModel: AnimeViewModel
+    lateinit var aniListViewModel: AniListViewModel
+    private lateinit var storageManager: StorageManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -26,8 +40,17 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        // Initialize ViewModel
+        // Initialize ViewModels
         viewModel = ViewModelProvider(this)[AnimeViewModel::class.java]
+        aniListViewModel = ViewModelProvider(this)[AniListViewModel::class.java]
+
+        // Initialize Storage Manager
+        storageManager = StorageManager.getInstance(this)
+
+        // Check if storage directory is set, if not show permission dialog
+        if (!storageManager.hasStorageDirectorySet()) {
+            showStoragePermissionDialog()
+        }
 
         // Set up navigation
         val navHostFragment = supportFragmentManager
@@ -35,5 +58,162 @@ class MainActivity : AppCompatActivity() {
         val navController = navHostFragment.navController
 
         findViewById<BottomNavigationView>(R.id.bottom_nav).setupWithNavController(navController)
+
+        // Set up fragment result listeners for episode navigation
+        setupEpisodeNavigationResultListeners()
+
+        // Handle possible AniList auth callback
+        handleIntent(intent)
+
+        // Set up observers
+        setupObservers()
+
+        // Show welcome dialog if first launch
+        checkFirstLaunch()
+    }
+
+    private fun checkFirstLaunch() {
+        // Check if this is the first app launch
+        if (WelcomeDialog.isFirstLaunch(this)) {
+            // Show welcome dialog with AniList login option
+            val welcomeDialog = WelcomeDialog.newInstance()
+            welcomeDialog.setOnDismissListener {
+                // After welcome dialog is dismissed, check if storage is set
+                if (!storageManager.hasStorageDirectorySet()) {
+                    showStoragePermissionDialog()
+                }
+            }
+            welcomeDialog.show(supportFragmentManager, WelcomeDialog.TAG)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        Log.d("MainActivity", "onNewIntent called with data: ${intent?.data}")
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        // Check if the intent contains data from an AniList auth callback
+        if (intent?.data != null) {
+            Log.d("MainActivity", "Processing intent with data: ${intent.data}")
+            if (intent.data.toString().contains("auth") && intent.data.toString().contains("callback")) {
+                Log.d("MainActivity", "Detected auth callback")
+                // Handle AniList authentication response
+                aniListViewModel.handleAuthIntent(intent)
+                // Show toast to inform user
+                Toast.makeText(this, "Processing AniList login...", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun setupObservers() {
+        // Observe error messages from AniListViewModel
+        aniListViewModel.errorMessage.observe(this) { errorMessage ->
+            errorMessage?.let {
+                Snackbar.make(findViewById(R.id.main), it, Snackbar.LENGTH_LONG).show()
+                aniListViewModel.clearErrorMessage()
+            }
+        }
+    }
+
+    private fun showStoragePermissionDialog() {
+        val dialog = StoragePermissionDialog.newInstance()
+        dialog.setOnPermissionGrantedListener {
+            // Permission was granted, continue with app initialization
+            Log.d("MainActivity", "Storage permission granted")
+        }
+        dialog.show(supportFragmentManager, StoragePermissionDialog.TAG)
+    }
+
+    private fun setupEpisodeNavigationResultListeners() {
+        supportFragmentManager.setFragmentResultListener("next_episode_request", this) { _, bundle ->
+            val animeTitle = bundle.getString("anime_title") ?: return@setFragmentResultListener
+            val episodeNumber = bundle.getInt("episode_number")
+
+            Log.d("MainActivity", "Next episode request received: $animeTitle, ep $episodeNumber")
+            loadEpisodeByNumber(animeTitle, episodeNumber)
+        }
+
+        supportFragmentManager.setFragmentResultListener("previous_episode_request", this) { _, bundle ->
+            val animeTitle = bundle.getString("anime_title") ?: return@setFragmentResultListener
+            val episodeNumber = bundle.getInt("episode_number")
+
+            Log.d("MainActivity", "Previous episode request received: $animeTitle, ep $episodeNumber")
+            loadEpisodeByNumber(animeTitle, episodeNumber)
+        }
+    }
+
+    // VideoPlayerFragment.EpisodeNavigationListener implementation
+    override fun onNextEpisode(currentAnime: String, currentEpisode: Int) {
+        Log.d("MainActivity", "Navigation to next episode: $currentAnime, from ep $currentEpisode")
+        loadEpisodeByNumber(currentAnime, currentEpisode + 1)
+    }
+
+    override fun onPreviousEpisode(currentAnime: String, currentEpisode: Int) {
+        if (currentEpisode <= 1) {
+            Log.d("MainActivity", "Cannot navigate to previous episode: already at first episode")
+            return
+        }
+
+        Log.d("MainActivity", "Navigation to previous episode: $currentAnime, from ep $currentEpisode")
+        loadEpisodeByNumber(currentAnime, currentEpisode - 1)
+    }
+
+    // Helper method to find and play an episode
+    private fun loadEpisodeByNumber(animeTitle: String, episodeNumber: Int) {
+        try {
+            // Ensure we're not in the middle of another fragment transaction
+            if (supportFragmentManager.isStateSaved) {
+                Log.d("MainActivity", "Fragment manager state saved, cannot perform transaction")
+                return
+            }
+
+            // Find the current player fragment and release it
+            val currentFragment = supportFragmentManager.findFragmentByTag("video_player")
+            if (currentFragment is VideoPlayerFragment) {
+                currentFragment.releasePlayer()
+            }
+
+            // Use StorageManager to find the episode
+            val episodeFile = storageManager.findEpisode(animeTitle, episodeNumber)
+
+            if (episodeFile != null) {
+                Log.d("MainActivity", "Found episode: ${animeTitle}, Episode ${episodeNumber}")
+
+                val episodeUri = episodeFile.uri
+                val episodeTitle = "Episode $episodeNumber"
+
+                // Create new player fragment
+                val playerFragment = VideoPlayerFragment.newInstance(
+                    episodeUri,
+                    episodeTitle,
+                    animeTitle,
+                    episodeNumber
+                )
+
+                // Set the navigation listener explicitly
+                playerFragment.setEpisodeNavigationListener(this)
+
+                // Use commit() instead of commitNow() when adding to back stack
+                supportFragmentManager.beginTransaction()
+                    .replace(R.id.nav_host_fragment, playerFragment, "video_player")
+                    .setReorderingAllowed(true)
+                    .addToBackStack(null)
+                    .commit()
+
+                // Execute pending transactions to apply the change immediately
+                supportFragmentManager.executePendingTransactions()
+
+                Log.d("MainActivity", "Started playing: $animeTitle, Episode $episodeNumber")
+            } else {
+                Log.e("MainActivity", "Episode file not found: $animeTitle, Episode $episodeNumber")
+                Toast.makeText(this, "Episode $episodeNumber not found", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error loading episode: ${e.message}", e)
+            Toast.makeText(this, "Error loading episode: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 }

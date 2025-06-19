@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+    Replace these values with your own from AniList:
+    1. Create an account at https://anilist.co
+    2. Go to Developer settings: https://anilist.co/settings/developer
+    3. Create a new client and get the client ID
+    4. Set a redirect URI (e.g., com.blank.anime.auth://callback)
+    -->
+    <string name="anilist_client_id">27743</string>
+    <string name="anilist_client_secret">tlWptDHxeH7bOZJvMEbNATwcL3HtNcVryvRcnwRa</string>
+    <string name="anilist_redirect_uri">com.blank.anime.auth://callback</string>
+</resources>

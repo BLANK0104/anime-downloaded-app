@@ -15,6 +15,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Add this to fix the manifest merger issue with AppAuth
+        manifestPlaceholders["appAuthRedirectScheme"] = "com.blank.anime"
     }
 
     buildFeatures {
@@ -58,6 +61,7 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.9.3")
+    implementation("com.squareup.okhttp3:okhttp:4.9.3")
 
     // Lifecycle components
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.5.1")
@@ -71,7 +75,28 @@ dependencies {
     implementation("androidx.navigation:navigation-ui-ktx:2.5.3")
 
     // Material design
-    implementation("com.google.android.material:material:1.7.0"
+    implementation("com.google.android.material:material:1.7.0")
 
-    )
+    // Image loading
+    implementation("io.coil-kt:coil:2.2.2")
+    implementation("io.coil-kt:coil-svg:2.2.2")
+
+    // AppAuth for OAuth
+    implementation("net.openid:appauth:0.11.1")
+
+    // Chrome Custom Tabs for OAuth flow
+    implementation("androidx.browser:browser:1.5.0")
+
+    // RecyclerView
+    implementation("androidx.recyclerview:recyclerview:1.3.0")
+    implementation("androidx.recyclerview:recyclerview-selection:1.1.0")
+
+    // CardView
+    implementation("androidx.cardview:cardview:1.0.0")
+
+    // ViewPager2 for image sliders
+    implementation("androidx.viewpager2:viewpager2:1.0.0")
+
+    // Swipe Refresh Layout
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
 }

@@ -1,808 +1,498 @@
 package com.blank.anime.ui
 
-import android.app.AlertDialog
-import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.SeekBar
 import androidx.fragment.app.Fragment
-import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.DividerItemDecoration
+import androidx.lifecycle.ViewModelProvider
+import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import coil.load
 import com.blank.anime.R
-import com.blank.anime.databinding.FragmentAnimeDetailsBinding
-import com.blank.anime.repository.AnimeRepository
-import kotlinx.coroutines.launch
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.Environment
-import android.util.Log
-import androidx.media3.common.util.UnstableApi
-import kotlin.math.abs
+import com.blank.anime.adapters.AnimeAdapter
+import com.blank.anime.adapters.EpisodeAdapter
+import com.blank.anime.databinding.FragmentAnimeDetailsEnhancedBinding
+import com.blank.anime.model.AniListMedia
+import com.blank.anime.model.AniListMediaStatus
+import com.blank.anime.model.AniListUserMediaStatus
+import com.blank.anime.model.Episode
+import com.blank.anime.utils.StorageManager
+import com.blank.anime.viewmodel.AniListViewModel
+import com.blank.anime.viewmodel.AnimeViewModel
+import com.google.android.material.chip.Chip
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
+import java.text.NumberFormat
+import java.util.Locale
 
 class AnimeDetailsFragment : Fragment() {
 
-    private var _binding: FragmentAnimeDetailsBinding? = null
+    private var _binding: FragmentAnimeDetailsEnhancedBinding? = null
     private val binding get() = _binding!!
 
-    private var animeId: String = ""
-    private var animeTitle: String = ""
-    private var totalEpisodes: Int = 0
-    private var isWatchMode = false // Default to download mode
+    private lateinit var animeViewModel: AnimeViewModel
+    private lateinit var aniListViewModel: AniListViewModel
+    private lateinit var storageManager: StorageManager
 
-    private lateinit var episodeAdapter: EpisodeAdapter
-    private val animeRepository = AnimeRepository()
+    private lateinit var recommendationsAdapter: AnimeAdapter
+    private lateinit var episodesAdapter: EpisodeAdapter
 
-    // Single companion object with constants
-    companion object {
-        private const val STORAGE_PERMISSION_CODE = 1001
-    }
+    // Get animeId from arguments directly instead of using Safe Args
+    private val animeId: Int
+        get() {
+            val idString = arguments?.getString("anime_id")
+            return idString?.toIntOrNull() ?: 16498 // Fallback to AOT only if parsing fails
+        }
+
+    // Current anime details
+    private var currentAnime: AniListMedia? = null
 
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        _binding = FragmentAnimeDetailsBinding.inflate(inflater, container, false)
+        _binding = FragmentAnimeDetailsEnhancedBinding.inflate(inflater, container, false)
         return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        // Extract arguments
-        arguments?.let { args ->
-            animeId = args.getString("anime_id", "") ?: ""
-            animeTitle = args.getString("anime_title", "") ?: ""
-            totalEpisodes = args.getInt("total_episodes", 0)
+        // Initialize ViewModels and services
+        aniListViewModel = ViewModelProvider(requireActivity())[AniListViewModel::class.java]
+        animeViewModel = ViewModelProvider(requireActivity())[AnimeViewModel::class.java]
+        storageManager = StorageManager.getInstance(requireContext())
+
+        // Set up toolbar
+        setupToolbar()
+
+        // Set up adapters
+        setupAdapters()
+
+        // Set up observers
+        setupObservers()
+
+        // Set up click listeners
+        setupClickListeners()
+
+        // Load anime details
+        loadAnimeDetails()
+    }
+
+    private fun setupToolbar() {
+        binding.toolbar.setNavigationOnClickListener {
+            findNavController().navigateUp()
+        }
+    }
+
+    private fun setupAdapters() {
+        // Recommendations adapter
+        recommendationsAdapter = AnimeAdapter { anime ->
+            // TODO: Navigate to anime details for the clicked recommendation
+            showSnackbar("Selected: ${anime.getPreferredTitle()}")
         }
 
-        setupUI()
-        setupRecyclerView()
-        setupListeners()
-    }
+        binding.recommendationsRecycler.apply {
+            layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
+            adapter = recommendationsAdapter
+        }
 
-    private fun setupUI() {
-        binding.animeTitle.text = animeTitle
-        binding.totalEpisodesText.text = "Total Episodes: $totalEpisodes"
-
-        // Set default episode range
-        binding.startEpisodeInput.setText("1")
-        binding.endEpisodeInput.setText(if (totalEpisodes > 5) "5" else totalEpisodes.toString())
-
-        // Initialize mode toggle button
-        updateModeButton()
-
-        // Initialize bulk download button visibility
-        binding.bulkDownloadButton.visibility = if (isWatchMode) View.GONE else View.VISIBLE
-    }
-
-    private fun updateModeButton() {
-        binding.modeToggleButton.text = if (isWatchMode) "Switch to Download Mode" else "Switch to Watch Mode"
-        binding.modeToggleButton.setCompoundDrawablesWithIntrinsicBounds(
-            if (isWatchMode) R.drawable.ic_download else R.drawable.ic_download,
-            0, 0, 0
+        // Episodes adapter
+        episodesAdapter = EpisodeAdapter(
+            onEpisodeClick = { episode ->
+                // Launch video player
+                showSnackbar("Playing episode ${episode.number}")
+            },
+            onDownloadClick = { episode ->
+                // Start download
+                showSnackbar("Downloading episode ${episode.number}")
+            }
         )
-    }
 
-    private fun setupRecyclerView() {
-        episodeAdapter = EpisodeAdapter()
         binding.episodesRecycler.apply {
-            adapter = episodeAdapter
             layoutManager = LinearLayoutManager(context)
-            addItemDecoration(DividerItemDecoration(context, DividerItemDecoration.VERTICAL))
+            adapter = episodesAdapter
         }
     }
 
-    private fun setupListeners() {
-        binding.loadEpisodesButton.setOnClickListener {
-            loadEpisodes()
+    private fun setupObservers() {
+        // Observe AniList recommendations
+        aniListViewModel.recommendations.observe(viewLifecycleOwner) { recommendations ->
+            val animeList = recommendations.map { it.media }
+            recommendationsAdapter.submitList(animeList)
         }
 
-        binding.modeToggleButton.setOnClickListener {
-            isWatchMode = !isWatchMode
-            updateModeButton()
-            // Update adapter to refresh buttons
-            episodeAdapter.notifyDataSetChanged()
-            // Show or hide bulk download button based on mode
-            binding.bulkDownloadButton.visibility = if (isWatchMode) View.GONE else View.VISIBLE
-        }
-
-        // Add bulk download button listener
-        binding.bulkDownloadButton.setOnClickListener {
-            if (episodeAdapter.itemCount > 0) {
-                startBulkDownload()
-            } else {
-                Toast.makeText(requireContext(), "Please load episodes first", Toast.LENGTH_SHORT).show()
+        // Observe error messages
+        aniListViewModel.errorMessage.observe(viewLifecycleOwner) { errorMessage ->
+            errorMessage?.let {
+                showSnackbar(it)
+                aniListViewModel.clearErrorMessage()
             }
         }
-    }
 
-    private fun loadEpisodes() {
-        val startEpisode = binding.startEpisodeInput.text.toString().toIntOrNull()
-        val endEpisode = binding.endEpisodeInput.text.toString().toIntOrNull()
+        // Observe episodes list
+        animeViewModel.episodes.observe(viewLifecycleOwner) { episodeResponse ->
+            // Process the nested map structure to create Episode objects
+            val episodesList = mutableListOf<Episode>()
+            var episodeNumber = 1
 
-        if (startEpisode == null || endEpisode == null) {
-            Toast.makeText(requireContext(), "Please enter valid episode numbers", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (startEpisode < 1 || endEpisode > totalEpisodes || startEpisode > endEpisode) {
-            Toast.makeText(
-                requireContext(),
-                "Please enter a valid range (1-$totalEpisodes)",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        // Show loading state
-        binding.progressBar.visibility = View.VISIBLE
-        binding.episodesRecycler.visibility = View.GONE
-
-        lifecycleScope.launch {
+            // Extract episodes from the nested map structure
             try {
-                // For demo/fallback, generate episodes
-                val episodes = (startEpisode..endEpisode).map { episodeNumber ->
-                    Episode(episodeNumber, "Episode $episodeNumber", "Description for episode $episodeNumber of $animeTitle")
-                }
-
-                episodeAdapter.submitList(episodes)
-
-                // Hide loading, show results
-                binding.progressBar.visibility = View.GONE
-                binding.episodesRecycler.visibility = View.VISIBLE
-
-                // After successfully loading episodes, show bulk download button if in download mode
-                if (!isWatchMode) {
-                    binding.bulkDownloadButton.visibility = View.VISIBLE
+                episodeResponse.episodes.forEach { (_, sources) ->
+                    sources.forEach { (_, resolutions) ->
+                        resolutions.forEach { (resolution, urls) ->
+                            if (urls.isNotEmpty()) {
+                                val url = urls[0]
+                                episodesList.add(
+                                    Episode(
+                                        id = episodeNumber.toString(), // Use episode number as ID
+                                        number = episodeNumber,
+                                        title = "Episode $episodeNumber",
+                                        description = "${currentAnime?.getPreferredTitle() ?: ""} - Episode $episodeNumber ($resolution)",
+                                        thumbnail = null, // No thumbnail in current structure
+                                        url = url,
+                                        isDownloaded = storageManager.episodeExists(
+                                            currentAnime?.getPreferredTitle() ?: "",
+                                            episodeNumber
+                                        )
+                                    )
+                                )
+                                episodeNumber++
+                            }
+                        }
+                    }
                 }
             } catch (e: Exception) {
-                Toast.makeText(requireContext(), "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-                binding.progressBar.visibility = View.GONE
+                Log.e("AnimeDetailsFragment", "Error processing episodes: ${e.message}")
+            }
+
+            // Submit processed episodes to adapter
+            episodesAdapter.submitList(episodesList)
+
+            // Update progress seekbar max
+            if (episodesList.isNotEmpty()) {
+                binding.progressSeekBar.max = episodesList.size
             }
         }
+    }
+
+    private fun setupClickListeners() {
+        // FAB play button
+        binding.fabPlay.setOnClickListener {
+            // Play the first episode or continue where left off
+            showSnackbar("Playing first episode")
+        }
+
+        // Download button
+        binding.downloadButton.setOnClickListener {
+            // Show download options dialog
+            showDownloadOptionsDialog()
+        }
+
+        // Stream button
+        binding.streamButton.setOnClickListener {
+            // Show stream options dialog
+            showStreamOptionsDialog()
+        }
+
+        // Update status button
+        binding.updateStatusButton.setOnClickListener {
+            showStatusUpdateDialog()
+        }
+
+        // Progress seekbar
+        binding.progressSeekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                if (fromUser && progress > 0) {
+                    binding.progressText.text = "Episode $progress of ${seekBar.max}"
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) {
+                // No action needed
+            }
+
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                if (seekBar.progress > 0) {
+                    // Update progress on AniList
+                    currentAnime?.let { anime ->
+                        aniListViewModel.updateProgress(anime.id, seekBar.progress)
+                        showSnackbar("Progress updated to episode ${seekBar.progress}")
+                    }
+                }
+            }
+        })
+    }
+
+    private fun loadAnimeDetails() {
+        // First load episodes directly using the ID
+        animeViewModel.getEpisodes(animeId.toString(), 1, 25)
+
+        // Get the anime title if it was passed in the bundle
+        val animeTitle = arguments?.getString("anime_title")
+
+        // Use title for search if available, otherwise use ID
+        val searchTerm = if (!animeTitle.isNullOrEmpty()) {
+            animeTitle
+        } else {
+            // Fallback to known IDs if we have them
+            when (animeId) {
+                16498 -> "Attack on Titan"
+                11757 -> "Sword Art Online"
+                21 -> "One Piece"
+                5114 -> "Fullmetal Alchemist: Brotherhood"
+                1735 -> "Naruto"
+                9253 -> "Steins;Gate"
+                else -> "popular anime" // If we don't know the ID, search for popular anime
+            }
+        }
+
+        // Search for the anime using title (more reliable than ID search)
+        aniListViewModel.searchAnime(searchTerm) { results ->
+            if (results.isNotEmpty()) {
+                // Found anime in AniList
+                val anime = results.first()
+                updateAnimeDetails(anime)
+
+                // Load recommendations for this anime
+                aniListViewModel.searchRecommendations(anime.id)
+            } else {
+                // Try a more generic search if first attempt fails
+                aniListViewModel.searchAnime("popular anime") { popularResults ->
+                    if (popularResults.isNotEmpty()) {
+                        val anime = popularResults.first()
+                        updateAnimeDetails(anime)
+                        showSnackbar("Couldn't find specific anime, showing a popular one instead")
+
+                        // Load recommendations for this anime
+                        aniListViewModel.searchRecommendations(anime.id)
+                    } else {
+                        showSnackbar("Couldn't load any anime details")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateAnimeDetails(anime: AniListMedia) {
+        currentAnime = anime
+
+        // Set collapsing toolbar title
+        binding.collapsingToolbar.title = anime.getPreferredTitle()
+
+        // Load banner image
+        anime.bannerImage?.let { url ->
+            binding.animeBanner.load(url) {
+                crossfade(true)
+                placeholder(R.drawable.ic_launcher_background)
+            }
+        }
+
+        // Load poster image
+        anime.coverImageLarge?.let { url ->
+            binding.animePoster.load(url) {
+                crossfade(true)
+                placeholder(R.drawable.ic_launcher_foreground)
+            }
+        }
+
+        // Set anime info
+        binding.animeTitle.text = anime.getPreferredTitle()
+
+        val formatYear = "${anime.format ?: "TV"} • ${anime.seasonYear} • " +
+                if (anime.episodes > 0) "${anime.episodes} episodes" else "? episodes"
+        binding.animeFormatYear.text = formatYear
+
+        // Set status
+        val statusText = "Status: ${
+            when (anime.status) {
+                AniListMediaStatus.FINISHED -> "Finished Airing"
+                AniListMediaStatus.RELEASING -> "Currently Airing"
+                AniListMediaStatus.NOT_YET_RELEASED -> "Not Yet Aired"
+                AniListMediaStatus.CANCELLED -> "Cancelled"
+                AniListMediaStatus.HIATUS -> "On Hiatus"
+                else -> "Unknown"
+            }
+        }"
+        binding.animeStatus.text = statusText
+
+        // Set description
+        binding.animeDescription.text = anime.description
+            ?.replace("<br>", "\n")
+            ?: "No description available."
+
+        // Set stats
+        binding.animeScore.text = anime.getFormattedScore()
+        binding.animePopularity.text = formatPopularity(anime.popularity)
+
+        // Set progress
+        if (anime.progress > 0) {
+            binding.progressSeekBar.progress = anime.progress
+            binding.progressText.text = "Episode ${anime.progress} of ${anime.episodes}"
+        } else {
+            binding.progressSeekBar.progress = 0
+            binding.progressText.text = "Not started"
+        }
+
+        // Add genre chips
+        binding.genreChips.removeAllViews()
+        anime.genres.forEach { genre ->
+            val chip = Chip(requireContext()).apply {
+                text = genre
+                isCheckable = false
+            }
+            binding.genreChips.addView(chip)
+        }
+
+        // Show/hide progress tracking based on login status
+        binding.progressCard.visibility =
+            if (aniListViewModel.isLoggedIn()) View.VISIBLE else View.GONE
+    }
+
+    private fun formatPopularity(popularity: Int): String {
+        return when {
+            popularity >= 1_000_000 -> String.format("%.1fM", popularity / 1_000_000f)
+            popularity >= 1_000 -> String.format("%.1fK", popularity / 1_000f)
+            else -> popularity.toString()
+        }
+    }
+
+    private fun showDownloadOptionsDialog() {
+        // Get the current episode list
+        val episodes = episodesAdapter.currentList
+
+        // If no episodes are available, show a message
+        if (episodes.isEmpty()) {
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle("No Episodes Available")
+                .setMessage("No episodes are currently available for this anime. Please try another anime or check back later.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        // Create array of episode titles for display
+        val episodeTitles = episodes.map { "Episode ${it.number}" }.toTypedArray()
+        val checkedItems = BooleanArray(episodes.size) { false }
+
+        // Show dialog with episode selection for downloading
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Download Episodes")
+            .setMultiChoiceItems(episodeTitles, checkedItems) { _, which, isChecked ->
+                checkedItems[which] = isChecked
+            }
+            .setPositiveButton("Download") { _, _ ->
+                val selectedEpisodes = episodes.filterIndexed { index, _ -> checkedItems[index] }
+                if (selectedEpisodes.isNotEmpty()) {
+                    // Start downloading selected episodes
+                    selectedEpisodes.forEach { episode ->
+                        // First get the download link
+                        animeViewModel.getDownloadLink(
+                            animeId = animeId.toString(),
+                            episodeNum = episode.number,
+                            lang = "jpn", // Default language
+                            quality = 720, // Default quality
+                            animeTitle = currentAnime?.getPreferredTitle() ?: "Unknown"
+                        )
+                    }
+
+                    // Observe the download info
+                    animeViewModel.downloadInfo.observe(viewLifecycleOwner) { downloadResponse ->
+                        if (downloadResponse != null) {
+                            // Now download the episode using the download response
+                            animeViewModel.downloadEpisodeViaStorageManager(requireContext(), downloadResponse)
+
+                            // Remove the observer after initiating download
+                            animeViewModel.downloadInfo.removeObserver { it }
+                        }
+                    }
+
+                    showSnackbar("Starting download of ${selectedEpisodes.size} episode(s)...")
+                } else {
+                    showSnackbar("No episodes selected")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showStreamOptionsDialog() {
+        // Get the current episode list
+        val episodes = episodesAdapter.currentList
+
+        // If no episodes are available, show a message
+        if (episodes.isEmpty()) {
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle("No Episodes Available")
+                .setMessage("No episodes are currently available for this anime. Please try another anime or check back later.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        // Create array of episode titles for display
+        val episodeTitles = episodes.map { "Episode ${it.number}" }.toTypedArray()
+
+        // Show dialog with episode selection for streaming
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Stream Episodes")
+            .setSingleChoiceItems(episodeTitles, -1) { dialog, which ->
+                val selectedEpisode = episodes[which]
+                // Navigate to video player with selected episode
+                val bundle = Bundle().apply {
+                    putString("anime_id", animeId.toString())
+                    putString("anime_title", currentAnime?.getPreferredTitle())
+                    putInt("episode_number", selectedEpisode.number)
+                    putString("episode_url", selectedEpisode.url)
+                }
+                findNavController().navigate(R.id.action_animeDetailsFragment_to_videoPlayerFragment, bundle)
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showStatusUpdateDialog() {
+        // Show dialog to update watch status
+        val statuses = arrayOf(
+            "Currently Watching",
+            "Plan to Watch",
+            "Completed",
+            "On Hold",
+            "Dropped"
+        )
+
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Update Status")
+            .setItems(statuses) { _, which ->
+                val status = when (which) {
+                    0 -> AniListUserMediaStatus.CURRENT
+                    1 -> AniListUserMediaStatus.PLANNING
+                    2 -> AniListUserMediaStatus.COMPLETED
+                    3 -> AniListUserMediaStatus.PAUSED
+                    4 -> AniListUserMediaStatus.DROPPED
+                    else -> AniListUserMediaStatus.PLANNING
+                }
+
+                currentAnime?.let { anime ->
+                    aniListViewModel.updateStatus(anime.id, status)
+                    showSnackbar("Status updated to ${statuses[which]}")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showSnackbar(message: String) {
+        Snackbar.make(binding.root, message, Snackbar.LENGTH_SHORT).show()
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
-    }
-
-    // Permission result handler
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == STORAGE_PERMISSION_CODE && grantResults.isNotEmpty()
-            && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(requireContext(), "Permission granted, you can download now", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(requireContext(), "Storage permission required for downloads", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun handleEpisodeAction(episode: Episode) {
-        if (isWatchMode) {
-            streamEpisode(episode)
-        } else {
-            downloadEpisode(episode)
-        }
-    }
-
-    @OptIn(UnstableApi::class)
-    private fun streamEpisode(episode: Episode) {
-        // Show loading dialog while fetching episode data
-        val progressDialog = android.app.ProgressDialog(requireContext()).apply {
-            setMessage("Checking available options...")
-            setCancelable(false)
-            show()
-        }
-
-        lifecycleScope.launch {
-            try {
-                // First get available options from the API
-                val response = animeRepository.getEpisodes(
-                    animeId = animeId,
-                    startEpisode = episode.number,
-                    endEpisode = episode.number
-                )
-
-                progressDialog.dismiss()
-
-                // Extract available languages and qualities
-                val episodeStr = episode.number.toString()
-                val availableOptions = response.episodes[episodeStr]
-
-                if (availableOptions.isNullOrEmpty()) {
-                    Toast.makeText(requireContext(), "No streaming options available", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-
-                // Get available languages
-                val availableLanguages = availableOptions.keys.toList()
-                val languageNames = availableLanguages.map {
-                    when (it) {
-                        "eng" -> "English"
-                        "jpn" -> "Japanese"
-                        else -> it.capitalize()
-                    }
-                }.toTypedArray()
-
-                // Show language selection dialog with available options
-                AlertDialog.Builder(requireContext())
-                    .setTitle("Select Language")
-                    .setItems(languageNames) { _, langIndex ->
-                        val selectedLang = availableLanguages[langIndex]
-
-                        // Get available qualities for this language
-                        val availableQualities = availableOptions[selectedLang]?.keys?.toList() ?: emptyList()
-                        val qualityLabels = availableQualities.map { "${it}p" }.toTypedArray()
-
-                        // Show quality selection dialog with available options
-                        AlertDialog.Builder(requireContext())
-                            .setTitle("Select Quality")
-                            .setItems(qualityLabels) { _, qualityIndex ->
-                                val selectedQuality = availableQualities[qualityIndex].toInt()
-
-                                // Try to get stream link using the download API
-                                getStreamLinkFromEpisodesApi(episode, selectedLang, selectedQuality)
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .show()
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-
-            } catch (e: Exception) {
-                progressDialog.dismiss()
-                Toast.makeText(
-                    requireContext(),
-                    "Error: ${e.message ?: "Unknown error"}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
-
-    @OptIn(UnstableApi::class)
-    private fun getStreamLinkFromEpisodesApi(episode: Episode, lang: String, quality: Int) {
-        val progressDialog = android.app.ProgressDialog(requireContext()).apply {
-            setMessage("Getting stream link...")
-            setCancelable(false)
-            show()
-        }
-
-        lifecycleScope.launch {
-            try {
-                // Use download API to get a direct link
-                val downloadResponse = animeRepository.getDownloadLink(
-                    animeId = animeId,
-                    episodeNum = episode.number,
-                    lang = lang,
-                    quality = quality,
-                    animeTitle = animeTitle
-                )
-
-                progressDialog.dismiss()
-
-                if (downloadResponse.download_link.isNotEmpty()) {
-                    // Launch video player with the direct link
-                    val episodeTitle = "$animeTitle - Episode ${episode.number}"
-                    val videoPlayerFragment = VideoPlayerFragment.newInstance(
-                        Uri.parse(downloadResponse.download_link),
-                        episodeTitle
-                    )
-
-                    requireActivity().supportFragmentManager
-                        .beginTransaction()
-                        .add(android.R.id.content, videoPlayerFragment)
-                        .addToBackStack("videoPlayer")
-                        .commit()
-                } else {
-                    Toast.makeText(
-                        requireContext(),
-                        "No stream available for this episode",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            } catch (e: Exception) {
-                progressDialog.dismiss()
-                Toast.makeText(
-                    requireContext(),
-                    "Error: ${e.message ?: "Unknown error"}",
-                    Toast.LENGTH_LONG
-                ).show()
-                e.printStackTrace()
-            }
-        }
-    }
-
-    private fun downloadEpisode(episode: Episode) {
-        // Check for storage permission
-        if (android.os.Build.VERSION.SDK_INT <= 29 &&
-            requireContext().checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-
-            requestPermissions(
-                arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE),
-                STORAGE_PERMISSION_CODE
-            )
-            return
-        }
-
-        val progressDialog = android.app.ProgressDialog(requireContext()).apply {
-            setMessage("Checking available options...")
-            setCancelable(false)
-            show()
-        }
-
-        lifecycleScope.launch {
-            try {
-                // First get available options from the API
-                val response = animeRepository.getEpisodes(
-                    animeId = animeId,
-                    startEpisode = episode.number,
-                    endEpisode = episode.number
-                )
-
-                progressDialog.dismiss()
-
-                // Extract available languages and qualities
-                val episodeStr = episode.number.toString()
-                val availableOptions = response.episodes[episodeStr]
-
-                if (availableOptions.isNullOrEmpty()) {
-                    Toast.makeText(requireContext(), "No download options available", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-
-                // Get available languages
-                val availableLanguages = availableOptions.keys.toList()
-                val languageNames = availableLanguages.map {
-                    when (it) {
-                        "eng" -> "English"
-                        "jpn" -> "Japanese"
-                        else -> it.capitalize()
-                    }
-                }.toTypedArray()
-
-                // Show language selection dialog with available options
-                AlertDialog.Builder(requireContext())
-                    .setTitle("Select Language")
-                    .setItems(languageNames) { _, langIndex ->
-                        val selectedLang = availableLanguages[langIndex]
-
-                        // Get available qualities for this language
-                        val availableQualities = availableOptions[selectedLang]?.keys?.toList() ?: emptyList()
-                        val qualityLabels = availableQualities.map { "${it}p" }.toTypedArray()
-
-                        // Show quality selection dialog with available options
-                        AlertDialog.Builder(requireContext())
-                            .setTitle("Select Quality")
-                            .setItems(qualityLabels) { _, qualityIndex ->
-                                val selectedQuality = availableQualities[qualityIndex].toInt()
-
-                                // Show loading while getting download link
-                                val downloadProgressDialog = android.app.ProgressDialog(requireContext()).apply {
-                                    setMessage("Getting download link...")
-                                    setCancelable(false)
-                                    show()
-                                }
-
-                                // Use the download API
-                                lifecycleScope.launch {
-                                    try {
-                                        val downloadResponse = animeRepository.getDownloadLink(
-                                            animeId = animeId,
-                                            episodeNum = episode.number,
-                                            lang = selectedLang,
-                                            quality = selectedQuality,
-                                            animeTitle = animeTitle
-                                        )
-
-                                        downloadProgressDialog.dismiss()
-
-                                        if (downloadResponse.download_link.isNotEmpty()) {
-                                            // Start download with the direct link
-                                            startDownload(
-                                                url = downloadResponse.download_link,
-                                                episodeNum = episode.number,
-                                                lang = selectedLang,
-                                                quality = selectedQuality
-                                            )
-                                        } else {
-                                            Toast.makeText(requireContext(),
-                                                "No download link available",
-                                                Toast.LENGTH_SHORT).show()
-                                        }
-                                    } catch (e: Exception) {
-                                        downloadProgressDialog.dismiss()
-                                        Toast.makeText(
-                                            requireContext(),
-                                            "Error: ${e.message ?: "Unknown error"}",
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                }
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .show()
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-
-            } catch (e: Exception) {
-                progressDialog.dismiss()
-                Toast.makeText(
-                    requireContext(),
-                    "Error: ${e.message ?: "Unknown error"}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
-
-    // Handle bulk download
-    private fun startBulkDownload() {
-        // Check for storage permission on older Android versions
-        if (android.os.Build.VERSION.SDK_INT <= 29 &&
-            requireContext().checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-
-            requestPermissions(
-                arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE),
-                STORAGE_PERMISSION_CODE
-            )
-            return
-        }
-
-        // Get the first episode to check available options
-        val episodes = episodeAdapter.getEpisodes()
-        if (episodes.isEmpty()) {
-            Toast.makeText(requireContext(), "No episodes available", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val progressDialog = android.app.ProgressDialog(requireContext()).apply {
-            setMessage("Checking available options...")
-            setCancelable(false)
-            show()
-        }
-
-        lifecycleScope.launch {
-            try {
-                // Get available options from the first episode
-                val response = animeRepository.getEpisodes(
-                    animeId = animeId,
-                    startEpisode = episodes.first().number,
-                    endEpisode = episodes.first().number
-                )
-
-                progressDialog.dismiss()
-
-                // Extract available languages and qualities
-                val episodeStr = episodes.first().number.toString()
-                val availableOptions = response.episodes[episodeStr]
-
-                if (availableOptions.isNullOrEmpty()) {
-                    Toast.makeText(requireContext(), "No download options available", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-
-                // Get available languages
-                val availableLanguages = availableOptions.keys.toList()
-                val languageNames = availableLanguages.map {
-                    when (it) {
-                        "eng" -> "English"
-                        "jpn" -> "Japanese"
-                        else -> it.capitalize()
-                    }
-                }.toTypedArray()
-
-                // Show language selection dialog with available options
-                AlertDialog.Builder(requireContext())
-                    .setTitle("Select Language")
-                    .setItems(languageNames) { _, langIndex ->
-                        val selectedLang = availableLanguages[langIndex]
-
-                        // Get available qualities for this language
-                        val availableQualities = availableOptions[selectedLang]?.keys?.toList() ?: emptyList()
-                        val qualityLabels = availableQualities.map { "${it}p" }.toTypedArray()
-
-                        // Show quality selection dialog with available options
-                        AlertDialog.Builder(requireContext())
-                            .setTitle("Select Quality")
-                            .setItems(qualityLabels) { _, qualityIndex ->
-                                val selectedQuality = availableQualities[qualityIndex].toInt()
-
-                                // Confirm dialog for bulk download
-                                val episodeCount = episodeAdapter.itemCount
-                                AlertDialog.Builder(requireContext())
-                                    .setTitle("Confirm Bulk Download")
-                                    .setMessage("Download all $episodeCount episodes in ${selectedQuality}p ${languageNames[langIndex]}?\n\nThis will queue multiple downloads.")
-                                    .setPositiveButton("Download") { _, _ ->
-                                        processBulkDownload(selectedLang, selectedQuality)
-                                    }
-                                    .setNegativeButton("Cancel", null)
-                                    .show()
-                            }
-                            .setNegativeButton("Cancel", null)
-                            .show()
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            } catch (e: Exception) {
-                progressDialog.dismiss()
-                Toast.makeText(
-                    requireContext(),
-                    "Error: ${e.message ?: "Unknown error"}",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
-
-    private var isBulkDownloadInProgress = false
-
-    private fun processBulkDownload(lang: String, quality: Int) {
-        val episodes = episodeAdapter.getEpisodes()
-
-        // Counters for successful and failed downloads
-        var successCount = 0
-        var failCount = 0
-
-        // Show bulk download status
-        binding.bulkDownloadStatus.visibility = View.VISIBLE
-        binding.bulkDownloadStatusText.text = "Bulk download in progress... (0/${episodes.size})"
-        binding.bulkDownloadStatus.setOnClickListener {
-            AlertDialog.Builder(requireContext())
-                .setTitle("Bulk Download Progress")
-                .setMessage("Downloading episodes...\n\nSuccess: $successCount\nFailed: $failCount")
-                .setPositiveButton("OK", null)
-                .show()
-        }
-
-        lifecycleScope.launch {
-            episodes.forEachIndexed { index, episode ->
-                var attempt = 0
-                var downloadSuccess = false
-
-                while (attempt < 3 && !downloadSuccess) { // Retry up to 3 times
-                    try {
-                        // Update status text
-                        binding.bulkDownloadStatusText.text = "Bulk download in progress... (${index + 1}/${episodes.size})"
-
-                        // Simulate download process
-                        val response = animeRepository.getDownloadLink(
-                            animeId = animeId,
-                            episodeNum = episode.number,
-                            lang = lang,
-                            quality = quality,
-                            animeTitle = animeTitle
-                        )
-
-                        if (response.download_link.isNotEmpty()) {
-                            startDownload(response.download_link, episode.number, lang, quality)
-                            successCount++
-                            downloadSuccess = true
-                        } else {
-                            throw Exception("Empty download link")
-                        }
-
-                        kotlinx.coroutines.delay(2000) // Increased delay between downloads
-                    } catch (e: Exception) {
-                        attempt++
-                        if (attempt == 3) {
-                            failCount++
-                            Log.e("DownloadDebug", "Failed to download episode ${episode.number} after 3 attempts", e)
-                        }
-                    }
-                }
-            }
-
-            // Hide status and show completion message
-            binding.bulkDownloadStatus.visibility = View.GONE
-            Toast.makeText(
-                requireContext(),
-                "Bulk download completed: $successCount success, $failCount failed",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    private fun startDownload(url: String, episodeNum: Int, lang: String, quality: Int) {
-        try {
-            val downloadManager = requireContext().getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-
-            // Log the URL for debugging
-            Log.d("DownloadDebug", "Starting download from URL: $url")
-
-            // Create a clean filename
-            val safeTitle = animeTitle.replace("[^a-zA-Z0-9]".toRegex(), "_")
-            val fileName = "${safeTitle}_E${episodeNum}_${lang}_${quality}p.mp4"
-
-            // Create request with minimal settings to avoid issues
-            val request = DownloadManager.Request(Uri.parse(url)).apply {
-                // Use only essential headers
-                addRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-
-                // Set title and description for notification
-                setTitle("${animeTitle} - Episode ${episodeNum}")
-                setDescription("${lang.uppercase()}, ${quality}p")
-
-                // Set MIME type
-                setMimeType("video/mp4")
-
-                // Make download visible in UI
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-
-                // Media scanner visibility
-                allowScanningByMediaScanner()
-
-                // Set destination - use Downloads directory
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-
-                // Allow network types
-                setAllowedOverMetered(true)
-                setAllowedOverRoaming(true)
-            }
-
-            // Enqueue the download
-            val downloadId = downloadManager.enqueue(request)
-            Log.d("DownloadDebug", "Download ID: $downloadId")
-
-            // Show toast message only for individual downloads
-            if (!isBulkDownloadInProgress) {
-                Toast.makeText(
-                    requireContext(),
-                    "Download started for Episode $episodeNum. Check notification area.",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-
-            // Register broadcast receiver
-            registerDownloadCompletionReceiver(downloadId, episodeNum)
-
-        } catch (e: Exception) {
-            Log.e("DownloadDebug", "Download error", e)
-            if (!isBulkDownloadInProgress) {
-                Toast.makeText(requireContext(), "Download error: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun registerDownloadCompletionReceiver(downloadId: Long, episodeNum: Int) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                if (id == downloadId) {
-                    // Check download status
-                    val downloadManager = context?.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
-                    if (downloadManager != null) {
-                        val query = DownloadManager.Query().setFilterById(downloadId)
-                        val cursor = downloadManager.query(query)
-
-                        if (cursor.moveToFirst()) {
-                            val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                            if (statusIndex >= 0) {
-                                val status = cursor.getInt(statusIndex)
-                                when (status) {
-                                    DownloadManager.STATUS_SUCCESSFUL ->
-                                        if (!isBulkDownloadInProgress) {
-                                            Toast.makeText(context, "Download completed for Episode $episodeNum", Toast.LENGTH_SHORT).show()
-                                        }
-                                    DownloadManager.STATUS_FAILED -> {
-                                        val reasonIndex = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
-                                        val reason = if (reasonIndex >= 0) cursor.getInt(reasonIndex) else 0
-                                        if (!isBulkDownloadInProgress) {
-                                            Toast.makeText(context, "Download failed: ${getDownloadErrorReason(reason)}", Toast.LENGTH_LONG).show()
-                                        }
-                                        Log.e("DownloadDebug", "Download failed for Episode $episodeNum: ${getDownloadErrorReason(reason)}")
-                                    }
-                                }
-                            }
-                        }
-                        cursor.close()
-                    }
-                    context?.unregisterReceiver(this)
-                }
-            }
-        }
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            requireContext().registerReceiver(
-                receiver,
-                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-                Context.RECEIVER_NOT_EXPORTED
-            )
-        } else {
-            requireContext().registerReceiver(
-                receiver,
-                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            )
-        }
-    }
-
-    // Helper function to translate download error codes to human-readable messages
-    private fun getDownloadErrorReason(reason: Int): String {
-        return when(reason) {
-            DownloadManager.ERROR_CANNOT_RESUME -> "Cannot resume download"
-            DownloadManager.ERROR_DEVICE_NOT_FOUND -> "Storage device not found"
-            DownloadManager.ERROR_FILE_ALREADY_EXISTS -> "File already exists"
-            DownloadManager.ERROR_FILE_ERROR -> "File error"
-            DownloadManager.ERROR_HTTP_DATA_ERROR -> "HTTP data error"
-            DownloadManager.ERROR_INSUFFICIENT_SPACE -> "Insufficient storage space"
-            DownloadManager.ERROR_TOO_MANY_REDIRECTS -> "Too many redirects"
-            DownloadManager.ERROR_UNHANDLED_HTTP_CODE -> "Unhandled HTTP code"
-            DownloadManager.ERROR_UNKNOWN -> "Unknown error"
-            else -> "Error code: $reason"
-        }
-    }
-
-    // Episode model class
-    data class Episode(
-        val number: Int,
-        val title: String,
-        val description: String
-    )
-
-    // Adapter for episode list
-    inner class EpisodeAdapter : RecyclerView.Adapter<EpisodeAdapter.EpisodeViewHolder>() {
-
-        private var episodes: List<Episode> = emptyList()
-
-        fun submitList(newList: List<Episode>) {
-            episodes = newList
-            notifyDataSetChanged()
-        }
-
-        fun getEpisodes(): List<Episode> {
-            return episodes
-        }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): EpisodeViewHolder {
-            val view = LayoutInflater.from(parent.context)
-                .inflate(R.layout.item_episode, parent, false)
-            return EpisodeViewHolder(view)
-        }
-
-        override fun onBindViewHolder(holder: EpisodeViewHolder, position: Int) {
-            holder.bind(episodes[position])
-        }
-
-        override fun getItemCount() = episodes.size
-
-        inner class EpisodeViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-            private val titleView: TextView = itemView.findViewById(R.id.episode_title)
-            private val descriptionView: TextView = itemView.findViewById(R.id.episode_description)
-            private val actionButton: Button = itemView.findViewById(R.id.download_button)
-
-            fun bind(episode: Episode) {
-                titleView.text = episode.title
-                descriptionView.text = episode.description
-
-                // Update button text based on current mode
-                actionButton.text = if (isWatchMode) "Watch" else "Download"
-                actionButton.setCompoundDrawablesWithIntrinsicBounds(
-                    if (isWatchMode) R.drawable.ic_download else R.drawable.ic_download,
-                    0, 0, 0
-                )
-
-                actionButton.setOnClickListener {
-                    handleEpisodeAction(episode)
-                }
-            }
-        }
     }
 }
