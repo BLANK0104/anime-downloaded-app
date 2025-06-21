@@ -21,6 +21,8 @@ import com.blank.anime.viewmodel.AniListViewModel
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.snackbar.Snackbar
 import android.widget.Toast
+import android.os.Handler
+import android.os.Looper
 
 @UnstableApi
 class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationListener {
@@ -32,6 +34,10 @@ class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationL
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Force portrait mode for the app by default
+        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
         setContentView(R.layout.activity_main)
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
@@ -219,6 +225,27 @@ class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationL
         } catch (e: Exception) {
             Log.e("MainActivity", "Error loading episode: ${e.message}", e)
             Toast.makeText(this, "Error loading episode: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Add a method to allow fragments to change orientation
+    fun setScreenOrientation(orientation: Int) {
+        try {
+            Log.d("MainActivity", "Orientation change requested to: $orientation")
+
+            // Override the default portrait orientation when needed
+            if (orientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE ||
+                orientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
+                Log.d("MainActivity", "Applying landscape orientation for video playback")
+            }
+
+            // Force orientation change
+            requestedOrientation = orientation
+
+            // Log the orientation change for debugging
+            Log.d("MainActivity", "Screen orientation changed to: $orientation")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to set orientation: ${e.message}", e)
         }
     }
 }

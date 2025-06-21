@@ -22,6 +22,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import com.blank.anime.MainActivity
 import com.blank.anime.R
 import com.blank.anime.databinding.FragmentVideoPlayerBinding
 import kotlin.math.abs
@@ -57,6 +58,11 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     private var isOrientationLocked = false
     private var controlsVisible = true
     private val controlsHideHandler = Handler(Looper.getMainLooper())
+
+    // Add preference key for video orientation
+    private val PREF_VIDEO_ORIENTATION = "video_player_orientation"
+    private val PREF_ORIENTATION_LOCKED = "video_orientation_locked"
+    private var currentOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
 
     // Constants for gestures
     private val SEEK_AMOUNT_DOUBLE_TAP = 5000L // 5 seconds
@@ -149,8 +155,14 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
         // Load saved watch position if available
         loadWatchProgress()
 
-        // Lock orientation to landscape initially
-        requireActivity().requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        // Load saved orientation preferences
+        val prefs = requireContext().getSharedPreferences("AnimePrefs", Context.MODE_PRIVATE)
+        isOrientationLocked = prefs.getBoolean(PREF_ORIENTATION_LOCKED, false)
+
+        // Force landscape mode for video playback
+        (activity as? MainActivity)?.setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
+        // Store current orientation to manage state
+        currentOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
 
         // Get audio service for volume control
         audioManager = requireContext().getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -196,7 +208,23 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
 
         // Set back button click listener
         binding.backButton.setOnClickListener {
-            requireActivity().supportFragmentManager.popBackStack()
+            // Save watch progress if needed before closing
+            saveWatchProgress()
+
+            // Release player resources before dismissing to avoid resource leaks
+            releasePlayer()
+
+            // Set orientation to portrait mode before removing the fragment
+            try {
+                (activity as? MainActivity)?.setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+            } catch (e: Exception) {
+                Log.e("VideoPlayerFragment", "Error setting orientation: ${e.message}", e)
+            }
+
+            // Remove this fragment from the container
+            requireActivity().supportFragmentManager.beginTransaction()
+                .remove(this)
+                .commit()
         }
 
         // Set play/pause button click listener
@@ -236,23 +264,58 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
         // Set up episode navigation buttons
         setupEpisodeNavigationButtons()
 
-        // Set orientation lock button click listener
+        // Set orientation lock button click listener with improved functionality
         binding.orientationLockButton.setOnClickListener {
-            isOrientationLocked = !isOrientationLocked
-            if (isOrientationLocked) {
-                requireActivity().requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-                showToast("Orientation locked")
-            } else {
-                requireActivity().requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                showToast("Orientation unlocked")
+            try {
+                when (currentOrientation) {
+                    // If in landscape locked mode, switch to portrait locked mode
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE -> {
+                        setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+                        isOrientationLocked = true
+                        showToast("Switched to portrait mode")
+                        Log.d("VideoPlayerFragment", "Switched to PORTRAIT mode")
+                    }
+                    // If in portrait locked mode, switch to auto-rotate mode
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT -> {
+                        setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR)
+                        isOrientationLocked = false
+                        showToast("Auto-rotation enabled")
+                        Log.d("VideoPlayerFragment", "Switched to SENSOR (auto-rotate) mode")
+                    }
+                    // If in landscape sensor mode, switch to landscape locked mode
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE -> {
+                        setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
+                        isOrientationLocked = true
+                        showToast("Locked to landscape mode")
+                        Log.d("VideoPlayerFragment", "Switched to fixed LANDSCAPE mode")
+                    }
+                    // For any other mode (auto-rotate or unspecified), switch to landscape sensor mode
+                    else -> {
+                        setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
+                        isOrientationLocked = false
+                        showToast("Using landscape auto-rotation")
+                        Log.d("VideoPlayerFragment", "Switched to SENSOR_LANDSCAPE mode")
+                    }
+                }
+
+                // Save orientation lock state
+                val prefs = requireContext().getSharedPreferences("AnimePrefs", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean(PREF_ORIENTATION_LOCKED, isOrientationLocked).apply()
+
+            } catch (e: Exception) {
+                Log.e("VideoPlayerFragment", "Failed to change orientation: ${e.message}", e)
+                showToast("Failed to change orientation")
             }
         }
 
         // Set up seekbar listener
         binding.seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            private var isSeeking = false
+
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
                     player?.let {
+                        // Calculate position based on the progress percentage
                         val newPosition = progress.toLong() * it.duration / 100
                         binding.currentTime.text = formatTime(newPosition)
                     }
@@ -260,14 +323,22 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             }
 
             override fun onStartTrackingTouch(seekBar: SeekBar) {
+                isSeeking = true
                 cancelHideControlsTask()
+                // Pause updates while user is seeking to avoid jumpy behavior
+                stopProgressUpdates()
             }
 
             override fun onStopTrackingTouch(seekBar: SeekBar) {
                 player?.let {
+                    // Calculate position based on the progress percentage
                     val newPosition = seekBar.progress.toLong() * it.duration / 100
+                    Log.d("VideoPlayerFragment", "Seeking to position: $newPosition (${seekBar.progress}%)")
                     it.seekTo(newPosition)
                 }
+                isSeeking = false
+                // Resume progress updates
+                startProgressUpdates()
                 scheduleHideControls()
             }
         })
@@ -389,6 +460,10 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
 
     override fun onResume() {
         super.onResume()
+
+        // Ensure we're in landscape mode even after returning from another app or screen
+        (activity as? MainActivity)?.setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
+
         hideSystemUI() // Ensure system UI stays hidden when returning to the fragment
         if (player != null) {
             startProgressUpdates()
@@ -421,15 +496,15 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
         super.onDestroy()
         cancelHideControlsTask() // Ensure all handlers are cleared
 
+        // Reset to portrait mode when leaving the video player
+        try {
+            (activity as? MainActivity)?.setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+        } catch (e: Exception) {
+            Log.e("VideoPlayerFragment", "Error resetting orientation", e)
+        }
+
         // Show the bottom navigation again when leaving the player
         activity?.findViewById<View>(R.id.bottom_nav)?.visibility = View.VISIBLE
-
-        // Reset orientation when leaving the player
-        try {
-            requireActivity().requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        } catch (e: Exception) {
-            // Ignore orientation errors
-        }
     }
 
     private fun initializePlayer() {
@@ -551,6 +626,110 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             }
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /**
+     * Sets the screen orientation and manages related preferences
+     * @param orientation One of the ActivityInfo.SCREEN_ORIENTATION_* constants
+     */
+    private fun setScreenOrientation(orientation: Int) {
+        try {
+            val activity = requireActivity()
+            val currentOrientationName = getOrientationName(activity.requestedOrientation)
+            val newOrientationName = getOrientationName(orientation)
+
+            Log.d("OrientationDebug", "Changing orientation from $currentOrientationName to $newOrientationName")
+            Log.d("OrientationDebug", "Current device rotation: ${getDeviceRotation()}")
+
+            // Force orientation change through main activity for consistency
+            if (activity is MainActivity) {
+                activity.setScreenOrientation(orientation)
+            } else {
+                activity.requestedOrientation = orientation
+            }
+
+            currentOrientation = orientation
+
+            // Save this orientation preference for future use
+            val prefs = requireContext().getSharedPreferences("AnimePrefs", Context.MODE_PRIVATE)
+            prefs.edit().putInt(PREF_VIDEO_ORIENTATION, orientation).apply()
+
+            Log.d("VideoPlayerFragment", "Set screen orientation to: $orientation")
+            Log.d("OrientationDebug", "Orientation set complete. isOrientationLocked=$isOrientationLocked")
+        } catch (e: Exception) {
+            Log.e("VideoPlayerFragment", "Error setting orientation", e)
+        }
+    }
+
+    /**
+     * Get the current device rotation in degrees
+     */
+    private fun getDeviceRotation(): Int {
+        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            requireActivity().display
+        } else {
+            @Suppress("DEPRECATION")
+            requireActivity().windowManager.defaultDisplay
+        }
+
+        val rotation = display?.rotation ?: 0
+        return when (rotation) {
+            Surface.ROTATION_0 -> 0
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+    }
+
+    /**
+     * Get a readable name for an orientation constant
+     */
+    private fun getOrientationName(orientation: Int): String {
+        return when (orientation) {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT -> "PORTRAIT"
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE -> "LANDSCAPE"
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR -> "SENSOR (Auto)"
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT -> "SENSOR_PORTRAIT"
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE -> "SENSOR_LANDSCAPE"
+            ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT -> "REVERSE_PORTRAIT"
+            ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE -> "REVERSE_LANDSCAPE"
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED -> "UNSPECIFIED"
+            ActivityInfo.SCREEN_ORIENTATION_USER -> "USER"
+            ActivityInfo.SCREEN_ORIENTATION_BEHIND -> "BEHIND"
+            ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR -> "FULL_SENSOR"
+            ActivityInfo.SCREEN_ORIENTATION_NOSENSOR -> "NOSENSOR"
+            ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT -> "USER_PORTRAIT"
+            ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE -> "USER_LANDSCAPE"
+            ActivityInfo.SCREEN_ORIENTATION_FULL_USER -> "FULL_USER"
+            ActivityInfo.SCREEN_ORIENTATION_LOCKED -> "LOCKED"
+            else -> "UNKNOWN($orientation)"
+        }
+    }
+
+    /**
+     * Updates the orientation button icon based on current orientation state
+     */
+    private fun updateOrientationButtonIcon() {
+        if (_binding == null) {
+            // Skip updating UI if binding is not initialized yet
+            return
+        }
+
+        when (currentOrientation) {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT -> {
+                binding.orientationLockButton.setImageResource(android.R.drawable.ic_menu_always_landscape_portrait)
+            }
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE,
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE -> {
+                binding.orientationLockButton.setImageResource(android.R.drawable.ic_lock_lock)
+            }
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR,
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED -> {
+                binding.orientationLockButton.setImageResource(android.R.drawable.ic_menu_rotate)
+            }
         }
     }
 

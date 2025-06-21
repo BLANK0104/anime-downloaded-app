@@ -2,9 +2,14 @@ package com.blank.anime.ui
 
 import android.app.AlertDialog
 import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -47,6 +52,22 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
     private val allDownloads = mutableListOf<DownloadItem>()
     private val animeList = mutableListOf<AnimeDownloadItem>()
 
+    // Auto-refresh handler and runnable
+    private val refreshHandler = Handler(Looper.getMainLooper())
+    private lateinit var refreshRunnable: Runnable
+    private var isAutoRefreshEnabled = true
+    private val REFRESH_INTERVAL = 1000L // 1 second
+
+    // BroadcastReceiver for download completion
+    private val downloadReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == DownloadManager.ACTION_DOWNLOAD_COMPLETE) {
+                Log.d("DownloadsFragment", "Received download completion broadcast")
+                refreshDownloads()
+            }
+        }
+    }
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -77,6 +98,16 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
 
         // Load downloads when fragment becomes visible
         loadDownloads()
+
+        // Register receiver for download completion
+        requireContext().registerReceiver(
+            downloadReceiver,
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            Context.RECEIVER_NOT_EXPORTED
+        )
+
+        // Setup periodic refresh
+        setupAutoRefresh()
     }
 
     private fun showStoragePermissionNeededMessage() {
@@ -522,9 +553,36 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
             .show()
     }
 
+    // Refresh downloads list periodically
+    private fun setupAutoRefresh() {
+        refreshRunnable = Runnable {
+            if (isAutoRefreshEnabled) {
+                Log.d("DownloadsFragment", "Auto-refreshing downloads...")
+                loadDownloads()
+                refreshHandler.postDelayed(refreshRunnable, REFRESH_INTERVAL)
+            }
+        }
+
+        // Start the periodic refresh
+        refreshHandler.postDelayed(refreshRunnable, REFRESH_INTERVAL)
+    }
+
+    // Call this method to refresh downloads manually
+    private fun refreshDownloads() {
+        Log.d("DownloadsFragment", "Refreshing downloads...")
+        loadDownloads()
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
+
+        // Unregister receiver
+        requireContext().unregisterReceiver(downloadReceiver)
+
+        // Stop auto-refresh
+        isAutoRefreshEnabled = false
+        refreshHandler.removeCallbacks(refreshRunnable)
     }
 
     // VideoPlayerFragment.EpisodeNavigationListener implementation
@@ -533,7 +591,20 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
         val nextEpisode = storageManager.findNextEpisode(currentAnime, currentEpisode)
 
         if (nextEpisode != null) {
-            playVideo(nextEpisode.uri.toString(), currentAnime, nextEpisode.episodeNumber)
+            Log.d("DownloadsFragment", "Found next episode: ${nextEpisode.episodeNumber}, uri: ${nextEpisode.uri}")
+
+            // Give the system a moment to clean up resources from the previous player
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    // Make sure we're still attached to a context
+                    if (isAdded) {
+                        playVideo(nextEpisode.uri.toString(), currentAnime, nextEpisode.episodeNumber)
+                    }
+                } catch (e: Exception) {
+                    Log.e("DownloadsFragment", "Error playing next episode: ${e.message}", e)
+                    Toast.makeText(requireContext(), "Error playing next episode: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }, 300) // Short delay to ensure previous player is fully released
         } else {
             Toast.makeText(requireContext(), "No next episode found", Toast.LENGTH_SHORT).show()
         }
@@ -544,7 +615,20 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
         val previousEpisode = storageManager.findPreviousEpisode(currentAnime, currentEpisode)
 
         if (previousEpisode != null) {
-            playVideo(previousEpisode.uri.toString(), currentAnime, previousEpisode.episodeNumber)
+            Log.d("DownloadsFragment", "Found previous episode: ${previousEpisode.episodeNumber}, uri: ${previousEpisode.uri}")
+
+            // Give the system a moment to clean up resources from the previous player
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    // Make sure we're still attached to a context
+                    if (isAdded) {
+                        playVideo(previousEpisode.uri.toString(), currentAnime, previousEpisode.episodeNumber)
+                    }
+                } catch (e: Exception) {
+                    Log.e("DownloadsFragment", "Error playing previous episode: ${e.message}", e)
+                    Toast.makeText(requireContext(), "Error playing previous episode: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }, 300) // Short delay to ensure previous player is fully released
         } else {
             Toast.makeText(requireContext(), "No previous episode found", Toast.LENGTH_SHORT).show()
         }
