@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.content.Intent
+import android.view.View
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -236,24 +237,33 @@ class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationL
         }
     }
 
-    // Add a method to allow fragments to change orientation
+    /**
+     * Controls the visibility of the bottom navigation bar
+     * @param show true to show the navigation bar, false to hide it
+     */
+    fun setBottomNavigationVisibility(show: Boolean) {
+        Log.d("MainActivity", "Setting bottom navigation visibility: ${if (show) "VISIBLE" else "GONE"}")
+        val bottomNav = findViewById<BottomNavigationView>(R.id.bottom_nav)
+        bottomNav.visibility = if (show) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * Changes screen orientation for video playback
+     * @param orientation the desired orientation, use ActivityInfo constants
+     */
     fun setScreenOrientation(orientation: Int) {
-        try {
-            Log.d("MainActivity", "Orientation change requested to: $orientation")
+        Log.d("MainActivity", "Orientation change requested to: $orientation")
 
-            // Override the default portrait orientation when needed
-            if (orientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE ||
-                orientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
-                Log.d("MainActivity", "Applying landscape orientation for video playback")
-            }
-
-            // Force orientation change
-            requestedOrientation = orientation
-
-            // Log the orientation change for debugging
-            Log.d("MainActivity", "Screen orientation changed to: $orientation")
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to set orientation: ${e.message}", e)
+        // Override the default portrait orientation when needed
+        if (orientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE ||
+            orientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
+            Log.d("MainActivity", "Applying landscape orientation for video playback")
         }
+
+        // Force orientation change
+        requestedOrientation = orientation
+
+        // Log the orientation change for debugging
+        Log.d("MainActivity", "Screen orientation changed to: $orientation")
     }
 }

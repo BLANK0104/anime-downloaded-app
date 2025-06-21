@@ -481,6 +481,10 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     override fun onResume() {
         super.onResume()
 
+        // Ensure the bottom navigation is hidden when fragment is visible
+        // Using the Activity method ensures consistency across all scenarios
+        (activity as? MainActivity)?.setBottomNavigationVisibility(false)
+
         // Ensure we're in landscape mode even after returning from another app or screen
         (activity as? MainActivity)?.setScreenOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE)
 
@@ -495,6 +499,8 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
         super.onPause()
         stopProgressUpdates()
         saveWatchProgress()
+        // Keep the bottom navigation hidden if we're pausing but not being removed
+        // Don't restore it here to avoid flashing during transitions
     }
 
     override fun onStop() {
@@ -509,7 +515,11 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
         cancelHideControlsTask() // Cancel pending hide controls tasks
         stopProgressUpdates()
         showSystemUI() // Restore system UI
+        // Release any resources when view is destroyed
+        releasePlayer()
         _binding = null
+        // Also restore the bottom navigation as a fallback
+        (activity as? MainActivity)?.setBottomNavigationVisibility(true)
     }
 
     override fun onDestroy() {
