@@ -835,194 +835,25 @@ class AnimeDetailsFragment : Fragment() {
     }
 
     private fun showSnackbar(message: String) {
-        Snackbar.make(binding.root, message, Snackbar.LENGTH_SHORT).show()
+        if (view == null || !isAdded || _binding == null) {
+            // Skip showing snackbar if fragment view is destroyed or not attached
+            Log.d("AnimeDetailsFragment", "Skipping snackbar: $message (view destroyed or not attached)")
+            return
+        }
+        try {
+            Snackbar.make(binding.root, message, Snackbar.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            // Fallback in case of any other issue
+            Log.e("AnimeDetailsFragment", "Error showing snackbar: ${e.message}")
+        }
     }
 
     /**
      * Shows a dialog for selecting streaming quality and language before playing the episode
      */
     private fun showStreamingQualityDialog(episode: Episode) {
-        // Fetch episode details to get available quality options
-        lifecycleScope.launch {
-            try {
-                // Show loading indicator using Snackbar instead of progressBar
-                val loadingSnackbar = Snackbar.make(binding.root, "Loading streaming options...", Snackbar.LENGTH_INDEFINITE)
-                loadingSnackbar.show()
-
-                // Get episodes info to extract available qualities and languages
-                val episodesResponse = animeViewModel.getEpisodesSynchronously(
-                    animeId = animeSessionId!!,
-                    startEpisode = episode.number,
-                    endEpisode = episode.number
-                )
-
-                // Hide loading indicator
-                loadingSnackbar.dismiss()
-
-                if (episodesResponse != null && episodesResponse.episodes.containsKey(episode.number.toString())) {
-                    val sources = episodesResponse.episodes[episode.number.toString()]
-
-                    // Extract available languages
-                    val availableLanguages = sources?.keys?.toList() ?: listOf("jpn")
-                    val languageLabels = availableLanguages.map {
-                        if (it == "jpn") "Japanese" else if (it == "eng") "English" else it
-                    }.toTypedArray()
-
-                    // Show language selection dialog
-                    MaterialAlertDialogBuilder(requireContext())
-                        .setTitle("Select Language for Streaming Episode ${episode.number}")
-                        .setSingleChoiceItems(languageLabels, 0) { langDialog, langIndex ->
-                            langDialog.dismiss()
-
-                            val selectedLang = availableLanguages[langIndex]
-
-                            // Get available qualities for the selected language
-                            val qualities = sources?.get(selectedLang)?.keys?.toList() ?: listOf("720")
-                            val qualityLabels = qualities.map { "${it}p" }.toTypedArray()
-
-                            // Show quality selection dialog
-                            MaterialAlertDialogBuilder(requireContext())
-                                .setTitle("Select Quality for Streaming Episode ${episode.number}")
-                                .setSingleChoiceItems(qualityLabels, 0) { qualityDialog, qualityIndex ->
-                                    qualityDialog.dismiss()
-
-                                    // Get the selected quality
-                                    val selectedQuality = qualities[qualityIndex].toInt()
-
-                                    Log.d("AnimeDetailsFragment", "Selected for streaming: Quality=${selectedQuality}p, Language=$selectedLang")
-
-                                    // Get the streaming URL with selected options
-                                    lifecycleScope.launch {
-                                        try {
-                                            // Show loading indicator using Snackbar instead of progressBar
-                                            val loadingSnackbar = Snackbar.make(binding.root, "Loading streaming options...", Snackbar.LENGTH_INDEFINITE)
-                                            loadingSnackbar.show()
-
-                                            // Use the download link API to get the streaming URL
-                                            val downloadInfo = animeViewModel.getDownloadLinkSynchronously(
-                                                animeId = animeSessionId!!,
-                                                episodeNum = episode.number,
-                                                lang = selectedLang,
-                                                quality = selectedQuality,
-                                                animeTitle = currentAnime?.getPreferredTitle() ?: "Unknown"
-                                            )
-
-                                            // Hide loading indicator
-                                            loadingSnackbar.dismiss()
-
-                                            if (downloadInfo != null && !downloadInfo.download_link.isNullOrEmpty()) {
-                                                // Create bundle with needed information
-                                                val bundle = Bundle().apply {
-                                                    putString("anime_id", animeId)
-                                                    putString("anime_title", currentAnime?.getPreferredTitle())
-                                                    putInt("episode_number", episode.number)
-                                                    putString("episode_url", downloadInfo.download_link)
-
-                                                    // Log the bundle contents for debugging
-                                                    Log.d("AnimeDetailsFragment", "Video player bundle: anime_id=$animeId, title=${currentAnime?.getPreferredTitle()}, episode=${episode.number}, using selected quality=$selectedQuality, language=$selectedLang")
-                                                }
-
-                                                // Navigate to video player
-                                                findNavController().navigate(R.id.action_animeDetailsFragment_to_videoPlayerFragment, bundle)
-                                                showSnackbar("Playing episode ${episode.number} (${selectedQuality}p, ${if(selectedLang == "jpn") "Japanese" else "English"})")
-                                            } else {
-                                                showSnackbar("Error: Could not get streaming URL for selected quality and language")
-                                            }
-                                        } catch (e: Exception) {
-                                            Log.e("AnimeDetailsFragment", "Error getting streaming URL: ${e.message}", e)
-                                            // Remove reference to non-existent progressBar
-                                            showSnackbar("Error: ${e.message ?: "Could not get streaming URL"}")
-                                        }
-                                    }
-                                }
-                                .setNegativeButton("Cancel", null)
-                                .show()
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                } else {
-                    // Fallback to hardcoded options if we can't get the episode details
-                    showDefaultStreamingQualityDialog(episode)
-                }
-            } catch (e: Exception) {
-                Log.e("AnimeDetailsFragment", "Error getting episode qualities: ${e.message}", e)
-
-                // Fallback to hardcoded options if there's an error
-                showDefaultStreamingQualityDialog(episode)
-            }
-        }
-    }
-
-    private fun showDefaultStreamingQualityDialog(episode: Episode) {
-        val qualities = arrayOf("720p", "1080p")
-        val languages = arrayOf("Japanese", "English (if available)")
-
-        // First select language
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle("Select Language for Streaming Episode ${episode.number}")
-            .setSingleChoiceItems(languages, 0) { langDialog, langIndex ->
-                langDialog.dismiss()
-
-                // Then select quality
-                MaterialAlertDialogBuilder(requireContext())
-                    .setTitle("Select Quality for Streaming Episode ${episode.number}")
-                    .setSingleChoiceItems(qualities, 0) { qualityDialog, qualityIndex ->
-                        qualityDialog.dismiss()
-
-                        // Get the selected quality and language
-                        val quality = if (qualityIndex == 0) 720 else 1080
-                        val language = if (langIndex == 0) "jpn" else "eng"
-
-                        Log.d("AnimeDetailsFragment", "Selected options for streaming (default): Quality=$quality, Language=$language")
-
-                        // Get the streaming URL with selected options
-                        lifecycleScope.launch {
-                            try {
-                                // Show loading indicator using Snackbar instead of progressBar
-                                val loadingSnackbar = Snackbar.make(binding.root, "Loading streaming options...", Snackbar.LENGTH_INDEFINITE)
-                                loadingSnackbar.show()
-
-                                // Use the same mechanism as download to get the URL for the selected quality and language
-                                val downloadInfo = animeViewModel.getDownloadLinkSynchronously(
-                                    animeId = animeSessionId!!,
-                                    episodeNum = episode.number,
-                                    lang = language,
-                                    quality = quality,
-                                    animeTitle = currentAnime?.getPreferredTitle() ?: "Unknown"
-                                )
-
-                                // Hide loading indicator
-                                loadingSnackbar.dismiss()
-
-                                if (downloadInfo != null && !downloadInfo.download_link.isNullOrEmpty()) {
-                                    // Create bundle with needed information
-                                    val bundle = Bundle().apply {
-                                        putString("anime_id", animeId)
-                                        putString("anime_title", currentAnime?.getPreferredTitle())
-                                        putInt("episode_number", episode.number)
-                                        putString("episode_url", downloadInfo.download_link)
-
-                                        // Log the bundle contents for debugging
-                                        Log.d("AnimeDetailsFragment", "Video player bundle: anime_id=$animeId, title=${currentAnime?.getPreferredTitle()}, episode=${episode.number}, using selected quality=$quality, language=$language")
-                                    }
-
-                                    // Navigate to video player
-                                    findNavController().navigate(R.id.action_animeDetailsFragment_to_videoPlayerFragment, bundle)
-                                    showSnackbar("Playing episode ${episode.number} (${quality}p, ${if(language == "jpn") "Japanese" else "English"})")
-                                } else {
-                                    showSnackbar("Error: Could not get streaming URL for selected quality and language")
-                                }
-                            } catch (e: Exception) {
-                                Log.e("AnimeDetailsFragment", "Error getting streaming URL: ${e.message}", e)
-                                showSnackbar("Error: ${e.message ?: "Could not get streaming URL"}")
-                            }
-                        }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        // Use the new dynamic quality dialog implementation instead
+        showDynamicQualityDialog(episode)
     }
 
     // New function to fetch episodes in batches with improved waiting logic
@@ -1354,5 +1185,121 @@ class AnimeDetailsFragment : Fragment() {
         _binding = null
         // Reset state when view is destroyed
         animeSessionId = null
+    }
+
+    /**
+     * Shows a dialog with dynamically available language and quality options for streaming
+     * Uses data from the API response to only show available options
+     */
+    private fun showDynamicQualityDialog(episode: Episode) {
+        Log.d("AnimeDetailsFragment", "Starting quality/language selection for streaming episode ${episode.number}")
+
+        // Fetch fresh data for this specific episode to get available qualities and languages
+        animeViewModel.getEpisodeDetails(animeId = animeSessionId!!, episodeNumber = episode.number)
+
+        // Observe episode data to get available options
+        animeViewModel.episodes.observe(viewLifecycleOwner) { episodeResponse ->
+            // Remove the observer to prevent multiple triggers
+            animeViewModel.episodes.removeObservers(viewLifecycleOwner)
+
+            try {
+                val episodeData = episodeResponse.episodes[episode.number.toString()]
+
+                if (episodeData != null) {
+                    // Get available languages from the API response
+                    val availableLanguages = episodeData.keys.toList()
+
+                    if (availableLanguages.isEmpty()) {
+                        showSnackbar("No language options available for this episode")
+                        return@observe
+                    }
+
+                    // Create human-readable language names for display
+                    val languageNames = availableLanguages.map { langCode ->
+                        when (langCode) {
+                            "jpn" -> "Japanese"
+                            "eng" -> "English"
+                            else -> langCode.capitalize()
+                        }
+                    }.toTypedArray()
+
+                    // Show language selection dialog
+                    MaterialAlertDialogBuilder(requireContext())
+                        .setTitle("Select Language for Episode ${episode.number}")
+                        .setSingleChoiceItems(languageNames, 0) { langDialog, langIndex ->
+                            langDialog.dismiss()
+
+                            // Get selected language
+                            val selectedLang = availableLanguages[langIndex]
+
+                            // Get available qualities for selected language
+                            val availableQualities = episodeData[selectedLang]?.keys?.toList() ?: emptyList()
+
+                            if (availableQualities.isEmpty()) {
+                                showSnackbar("No quality options available for ${languageNames[langIndex]}")
+                                return@setSingleChoiceItems
+                            }
+
+                            // Create human-readable quality names for display (e.g., 720 -> 720p)
+                            val qualityNames = availableQualities.map { "${it}p" }.toTypedArray()
+
+                            // Show quality selection dialog
+                            MaterialAlertDialogBuilder(requireContext())
+                                .setTitle("Select Quality for Episode ${episode.number}")
+                                .setSingleChoiceItems(qualityNames, 0) { qualityDialog, qualityIndex ->
+                                    qualityDialog.dismiss()
+
+                                    // Get selected quality
+                                    val selectedQuality = availableQualities[qualityIndex].toInt()
+
+                                    Log.d("AnimeDetailsFragment", "Selected for streaming: Quality=${qualityNames[qualityIndex]}, Language=$selectedLang")
+
+                                    // Now get the download link for streaming
+                                    animeViewModel.getDownloadLink(
+                                        animeId = animeSessionId!!,
+                                        episodeNum = episode.number,
+                                        lang = selectedLang,
+                                        quality = selectedQuality,
+                                        animeTitle = currentAnime?.getPreferredTitle() ?: "Unknown"
+                                    )
+
+                                    // Observe the download info for streaming
+                                    animeViewModel.downloadInfo.observe(viewLifecycleOwner) { downloadResponse ->
+                                        // Remove the observer to prevent multiple triggers
+                                        animeViewModel.downloadInfo.removeObservers(viewLifecycleOwner)
+
+                                        if (downloadResponse != null) {
+                                            // Navigate to video player with the stream URL
+                                            val bundle = Bundle().apply {
+                                                putString("anime_id", animeId.toString())
+                                                putString("anime_title", currentAnime?.getPreferredTitle())
+                                                putInt("episode_number", episode.number)
+                                                putString("episode_url", downloadResponse.download_link)
+                                                putInt("selected_quality", selectedQuality)
+                                                putString("selected_language", selectedLang)
+                                            }
+                                            findNavController().navigate(
+                                                R.id.action_animeDetailsFragment_to_videoPlayerFragment,
+                                                bundle
+                                            )
+                                        } else {
+                                            showSnackbar("Error getting stream URL")
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                } else {
+                    // Fallback to default dialog if episode data is not available
+                    showDefaultQualityDialog(episode)
+                }
+            } catch (e: Exception) {
+                Log.e("AnimeDetailsFragment", "Error parsing episode data: ${e.message}", e)
+                showDefaultQualityDialog(episode)
+            }
+        }
     }
 }

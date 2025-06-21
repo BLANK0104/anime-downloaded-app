@@ -360,4 +360,37 @@ class AnimeViewModel : ViewModel() {
             Log.d("AnimeViewModel", "Added placeholder episodes, total now: ${currentEpisodes.size}")
         }
     }
+
+    // Get episode details for a specific episode
+    fun getEpisodeDetails(animeId: String, episodeNumber: Int) {
+        viewModelScope.launch {
+            try {
+                _loading.postValue(true)
+                val response = repository.getEpisodes(
+                    animeId = animeId,
+                    startEpisode = episodeNumber,
+                    endEpisode = episodeNumber
+                )
+                _episodes.postValue(response)
+                _loading.postValue(false)
+            } catch (e: Exception) {
+                _error.postValue("Error fetching episode details: ${e.message}")
+                _loading.postValue(false)
+                Log.e("AnimeViewModel", "Error fetching episode details", e)
+            }
+        }
+    }
+
+    // Get available qualities for an episode
+    fun getAvailableQualities(episodeNumber: Int): Map<String, List<String>> {
+        val episodeData = _episodes.value?.episodes?.get(episodeNumber.toString())
+        return episodeData?.mapValues { (_, languageMap) ->
+            languageMap.keys.toList()
+        } ?: emptyMap()
+    }
+
+    // Get available languages for an episode
+    fun getAvailableLanguages(episodeNumber: Int): List<String> {
+        return _episodes.value?.episodes?.get(episodeNumber.toString())?.keys?.toList() ?: emptyList()
+    }
 }
