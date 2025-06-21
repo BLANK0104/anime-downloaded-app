@@ -69,6 +69,13 @@ class AnimeViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Clears the current episodes data to prepare for batch loading
+     */
+    fun clearEpisodes() {
+        _episodes.value = EpisodeResponse(emptyMap())
+    }
+
     fun getDownloadLink(
         animeId: String,
         episodeNum: Int,
@@ -161,6 +168,44 @@ class AnimeViewModel : ViewModel() {
         data class Error(val message: String) : Result()
     }
 
+    // Add synchronous methods for direct coroutine use in fragments
+
+    /**
+     * Synchronous version of getEpisodes that can be called from a coroutine scope
+     * Returns the episode response directly instead of using LiveData
+     */
+    suspend fun getEpisodesSynchronously(
+        animeId: String,
+        startEpisode: Int,
+        endEpisode: Int
+    ): EpisodeResponse? {
+        return try {
+            repository.getEpisodes(animeId, startEpisode, endEpisode)
+        } catch (e: Exception) {
+            _error.postValue("Error getting episodes: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Synchronous version of getDownloadLink that can be called from a coroutine scope
+     * Returns the download response directly instead of using LiveData
+     */
+    suspend fun getDownloadLinkSynchronously(
+        animeId: String,
+        episodeNum: Int,
+        lang: String,
+        quality: Int,
+        animeTitle: String
+    ): DownloadResponse? {
+        return try {
+            repository.getDownloadLink(animeId, episodeNum, lang, quality, animeTitle)
+        } catch (e: Exception) {
+            _error.postValue("Error getting download link: ${e.message}")
+            null
+        }
+    }
+
     // Class for tracking download progress
     data class DownloadProgress(
         val animeTitle: String,
@@ -241,6 +286,78 @@ class AnimeViewModel : ViewModel() {
 
         override fun markSupported(): Boolean {
             return inputStream.markSupported()
+        }
+    }
+
+    /**
+     * Adds episodes from a batch to the current list of episodes
+     * This is used when fetching episodes in batches
+     */
+    fun addEpisodesToCurrentList(newEpisodes: Map<String, Map<String, Map<String, List<String>>>>) {
+        val currentEpisodes = _episodes.value?.episodes ?: mutableMapOf()
+        val updatedEpisodes = currentEpisodes.toMutableMap()
+
+        // Add all episodes from the new batch to the existing map
+        updatedEpisodes.putAll(newEpisodes)
+
+        // Log episode numbers before and after merging
+        val beforeKeys = currentEpisodes.keys.sorted()
+        val afterKeys = updatedEpisodes.keys.sorted()
+        Log.d("AnimeViewModel", "Episodes before adding: $beforeKeys (${beforeKeys.size} episodes)")
+        Log.d("AnimeViewModel", "Episodes after adding: $afterKeys (${afterKeys.size} episodes)")
+        Log.d("AnimeViewModel", "New episodes added: ${newEpisodes.keys}")
+
+        // Create a new EpisodeResponse with the updated episodes map
+        val updatedResponse = EpisodeResponse(episodes = updatedEpisodes)
+
+        // Update the LiveData
+        _episodes.postValue(updatedResponse)
+    }
+
+    /**
+     * Ensures all expected episodes are in the episodes map
+     * If an episode is missing, it will create a placeholder with sample URLs
+     * @param totalExpectedEpisodes The total number of episodes expected for this anime
+     * @param placeholderUrl Optional URL to use for placeholders, defaults to a sample URL
+     */
+    fun ensureAllEpisodesPresent(totalExpectedEpisodes: Int, placeholderUrl: String = "https://placeholder.url/episode") {
+        val currentEpisodes = _episodes.value?.episodes?.toMutableMap() ?: mutableMapOf()
+        var updated = false
+
+        // Check if all expected episodes are present
+        for (i in 1..totalExpectedEpisodes) {
+            val episodeNum = i.toString()
+            if (!currentEpisodes.containsKey(episodeNum)) {
+                Log.d("AnimeViewModel", "Adding placeholder for missing episode: $episodeNum")
+
+                // Create placeholder episode with sample URLs for all qualities and languages
+                val placeholderEpisode = mutableMapOf<String, MutableMap<String, List<String>>>()
+
+                // Add placeholder for English and Japanese audio
+                val languages = listOf("eng", "jpn")
+                val qualities = listOf("360", "720", "1080")
+
+                languages.forEach { lang ->
+                    val qualityMap = mutableMapOf<String, List<String>>()
+                    qualities.forEach { quality ->
+                        qualityMap[quality] = listOf("$placeholderUrl/${episodeNum}_${lang}_${quality}")
+                    }
+                    placeholderEpisode[lang] = qualityMap
+                }
+
+                // Add the placeholder episode to the map
+                currentEpisodes[episodeNum] = placeholderEpisode
+                updated = true
+            }
+        }
+
+        if (updated) {
+            // Create a new EpisodeResponse with the updated episodes map
+            val updatedResponse = EpisodeResponse(episodes = currentEpisodes)
+
+            // Update the LiveData
+            _episodes.postValue(updatedResponse)
+            Log.d("AnimeViewModel", "Added placeholder episodes, total now: ${currentEpisodes.size}")
         }
     }
 }

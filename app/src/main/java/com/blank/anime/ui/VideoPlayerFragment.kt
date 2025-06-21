@@ -141,15 +141,29 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
         activity?.findViewById<View>(R.id.bottom_nav)?.visibility = View.GONE
 
         arguments?.let {
+            // First try to get URI from the standard way (direct URI passing)
             videoUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 it.getParcelable(ARG_VIDEO_URI, Uri::class.java)
             } else {
                 @Suppress("DEPRECATION")
                 it.getParcelable(ARG_VIDEO_URI)
             }
+
+            // If videoUri is null, check if there's an episode_url string parameter
+            if (videoUri == null) {
+                val episodeUrl = it.getString("episode_url")
+                if (!episodeUrl.isNullOrEmpty()) {
+                    Log.d("VideoPlayerFragment", "Found episode URL in arguments: $episodeUrl")
+                    videoUri = Uri.parse(episodeUrl)
+                }
+            }
+
             videoTitle = it.getString(ARG_VIDEO_TITLE)
-            animeTitle = it.getString(ARG_ANIME_TITLE)
-            episodeNumber = it.getInt(ARG_EPISODE_NUMBER, 0)
+            animeTitle = it.getString(ARG_ANIME_TITLE) ?: it.getString("anime_title") // Try both parameter names
+            episodeNumber = it.getInt(ARG_EPISODE_NUMBER, it.getInt("episode_number", 0)) // Try both parameter names
+
+            // Log what we found for debugging
+            Log.d("VideoPlayerFragment", "Arguments processed - URI: $videoUri, Title: $videoTitle, Anime: $animeTitle, Episode: $episodeNumber")
         }
 
         // Load saved watch position if available
@@ -221,10 +235,16 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
                 Log.e("VideoPlayerFragment", "Error setting orientation: ${e.message}", e)
             }
 
-            // Remove this fragment from the container
-            requireActivity().supportFragmentManager.beginTransaction()
-                .remove(this)
-                .commit()
+            // Use the parent fragment manager that added this fragment
+            // This fixes the "Fragment already attached" crash
+            val parentFragmentManager = parentFragmentManager
+            if (isAdded && !parentFragmentManager.isDestroyed && !parentFragmentManager.isStateSaved) {
+                parentFragmentManager.beginTransaction()
+                    .remove(this)
+                    .commit()
+            } else {
+                Log.w("VideoPlayerFragment", "Cannot remove fragment: not added or parent manager unavailable")
+            }
         }
 
         // Set play/pause button click listener

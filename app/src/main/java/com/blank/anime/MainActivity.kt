@@ -186,6 +186,14 @@ class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationL
             val episodeFile = storageManager.findEpisode(animeTitle, episodeNumber)
             val episodeTitle = "Episode $episodeNumber"
 
+            // Check if we have a valid source (local file or streaming URL)
+            if (episodeFile == null && streamingUrl.isNullOrEmpty()) {
+                // No valid source available, show error message
+                Log.e("MainActivity", "No local file or streaming URL available for: $animeTitle, Episode $episodeNumber")
+                Toast.makeText(this, "Error: No video source available for this episode.", Toast.LENGTH_LONG).show()
+                return
+            }
+
             // Create and show the player fragment (either with local URI or streaming URL)
             val playerFragment = if (episodeFile != null) {
                 // Use local file if available
@@ -197,9 +205,9 @@ class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationL
                     episodeNumber
                 )
             } else {
-                // No local file, use streaming URL directly
-                Log.d("MainActivity", "No local episode found, streaming: $animeTitle, Episode $episodeNumber")
-                val streamingUri = Uri.parse(streamingUrl ?: return) // Use the streaming URL that was passed
+                // Use streaming URL
+                Log.d("MainActivity", "No local episode found, streaming: $animeTitle, Episode $episodeNumber, URL: $streamingUrl")
+                val streamingUri = Uri.parse(streamingUrl)
                 VideoPlayerFragment.newInstance(
                     streamingUri,
                     episodeTitle,
