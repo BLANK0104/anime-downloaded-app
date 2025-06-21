@@ -162,7 +162,7 @@ class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationL
     }
 
     // Helper method to find and play an episode
-    private fun loadEpisodeByNumber(animeTitle: String, episodeNumber: Int) {
+    private fun loadEpisodeByNumber(animeTitle: String, episodeNumber: Int, streamingUrl: String? = null) {
         try {
             // Ensure we're not in the middle of another fragment transaction
             if (supportFragmentManager.isStateSaved) {
@@ -176,41 +176,46 @@ class MainActivity : AppCompatActivity(), VideoPlayerFragment.EpisodeNavigationL
                 currentFragment.releasePlayer()
             }
 
-            // Use StorageManager to find the episode
+            // First check if we have a local copy of the episode
             val episodeFile = storageManager.findEpisode(animeTitle, episodeNumber)
+            val episodeTitle = "Episode $episodeNumber"
 
-            if (episodeFile != null) {
-                Log.d("MainActivity", "Found episode: ${animeTitle}, Episode ${episodeNumber}")
-
-                val episodeUri = episodeFile.uri
-                val episodeTitle = "Episode $episodeNumber"
-
-                // Create new player fragment
-                val playerFragment = VideoPlayerFragment.newInstance(
-                    episodeUri,
+            // Create and show the player fragment (either with local URI or streaming URL)
+            val playerFragment = if (episodeFile != null) {
+                // Use local file if available
+                Log.d("MainActivity", "Found local episode: $animeTitle, Episode $episodeNumber")
+                VideoPlayerFragment.newInstance(
+                    episodeFile.uri,
                     episodeTitle,
                     animeTitle,
                     episodeNumber
                 )
-
-                // Set the navigation listener explicitly
-                playerFragment.setEpisodeNavigationListener(this)
-
-                // Use commit() instead of commitNow() when adding to back stack
-                supportFragmentManager.beginTransaction()
-                    .replace(R.id.nav_host_fragment, playerFragment, "video_player")
-                    .setReorderingAllowed(true)
-                    .addToBackStack(null)
-                    .commit()
-
-                // Execute pending transactions to apply the change immediately
-                supportFragmentManager.executePendingTransactions()
-
-                Log.d("MainActivity", "Started playing: $animeTitle, Episode $episodeNumber")
             } else {
-                Log.e("MainActivity", "Episode file not found: $animeTitle, Episode $episodeNumber")
-                Toast.makeText(this, "Episode $episodeNumber not found", Toast.LENGTH_SHORT).show()
+                // No local file, use streaming URL directly
+                Log.d("MainActivity", "No local episode found, streaming: $animeTitle, Episode $episodeNumber")
+                val streamingUri = Uri.parse(streamingUrl ?: return) // Use the streaming URL that was passed
+                VideoPlayerFragment.newInstance(
+                    streamingUri,
+                    episodeTitle,
+                    animeTitle,
+                    episodeNumber
+                )
             }
+
+            // Set the navigation listener explicitly
+            playerFragment.setEpisodeNavigationListener(this)
+
+            // Use commit() instead of commitNow() when adding to back stack
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.nav_host_fragment, playerFragment, "video_player")
+                .setReorderingAllowed(true)
+                .addToBackStack(null)
+                .commit()
+
+            // Execute pending transactions to apply the change immediately
+            supportFragmentManager.executePendingTransactions()
+
+            Log.d("MainActivity", "Started playing: $animeTitle, Episode $episodeNumber")
         } catch (e: Exception) {
             Log.e("MainActivity", "Error loading episode: ${e.message}", e)
             Toast.makeText(this, "Error loading episode: ${e.message}", Toast.LENGTH_SHORT).show()

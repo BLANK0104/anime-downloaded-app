@@ -30,6 +30,13 @@ import kotlin.math.abs
 class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     GestureDetector.OnDoubleTapListener, View.OnTouchListener {
 
+    // Media3 player state constants
+    private val PLAYER_STATE_IDLE = Player.STATE_IDLE
+    private val PLAYER_STATE_BUFFERING = Player.STATE_BUFFERING
+    private val PLAYER_STATE_READY = Player.STATE_READY
+    private val PLAYER_STATE_ENDED = Player.STATE_ENDED
+    private val PLAYER_STATE_ERROR = 4 // Explicitly define ERROR state value
+
     private var _binding: FragmentVideoPlayerBinding? = null
     private val binding get() = _binding!!
 
@@ -426,6 +433,8 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     }
 
     private fun initializePlayer() {
+        Log.d("VideoPlayerFragment", "Initializing player with URI: $videoUri")
+
         player = ExoPlayer.Builder(requireContext())
             .build()
             .also { exoPlayer ->
@@ -433,14 +442,48 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
 
                 // Set up media item
                 videoUri?.let { uri ->
-                    val mediaItem = MediaItem.fromUri(uri)
-                    exoPlayer.setMediaItem(mediaItem)
-                }
+                    // Check if this is a pahe.win URL that needs resolving
+                    if (uri.toString().contains("pahe.win")) {
+                        // Show loading indicator
+                        binding.loadingIndicator.visibility = View.VISIBLE
 
-                // Set playback parameters
-                exoPlayer.playWhenReady = playWhenReady
-                exoPlayer.seekTo(playbackPosition)
-                exoPlayer.prepare()
+                        // Start a background thread to resolve the actual video URL
+                        Thread {
+                            try {
+                                Log.d("VideoPlayerFragment", "Resolving redirect URL: $uri")
+                                val resolvedUrl = resolveRedirectUrl(uri.toString())
+                                Log.d("VideoPlayerFragment", "Resolved URL: $resolvedUrl")
+
+                                // Update the player on the main thread
+                                activity?.runOnUiThread {
+                                    if (isAdded) {  // Make sure fragment is still attached
+                                        val mediaItem = MediaItem.fromUri(resolvedUrl)
+                                        exoPlayer.setMediaItem(mediaItem)
+                                        exoPlayer.playWhenReady = playWhenReady
+                                        exoPlayer.seekTo(playbackPosition)
+                                        exoPlayer.prepare()
+                                        binding.loadingIndicator.visibility = View.GONE
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("VideoPlayerFragment", "Error resolving URL: ${e.message}", e)
+                                activity?.runOnUiThread {
+                                    if (isAdded) {
+                                        binding.loadingIndicator.visibility = View.GONE
+                                        showToast("Error loading video: ${e.message}")
+                                    }
+                                }
+                            }
+                        }.start()
+                    } else {
+                        // Direct URL, no need for resolution
+                        val mediaItem = MediaItem.fromUri(uri)
+                        exoPlayer.setMediaItem(mediaItem)
+                        exoPlayer.playWhenReady = playWhenReady
+                        exoPlayer.seekTo(playbackPosition)
+                        exoPlayer.prepare()
+                    }
+                }
 
                 // Start progress updates
                 startProgressUpdates()
@@ -448,8 +491,13 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
                 // Add a listener to update play/pause button and controls
                 exoPlayer.addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
-                        if (state == Player.STATE_READY) {
+                        if (state == PLAYER_STATE_READY) {
                             updateProgressBar()
+                        } else if (state == PLAYER_STATE_ENDED) {
+                            Log.d("VideoPlayerFragment", "Playback ended")
+                        } else if (state == PLAYER_STATE_ERROR) {
+                            Log.e("VideoPlayerFragment", "Player error occurred")
+                            showToast("Error playing video")
                         }
                     }
 
@@ -464,30 +512,45 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
             }
     }
 
-    fun releasePlayer() {
+    /**
+     * Resolves redirect URLs to get the final video URL
+     */
+    private fun resolveRedirectUrl(urlString: String): String {
+        Log.d("VideoPlayerFragment", "Starting URL resolution for: $urlString")
+
+        // For pahe.win links, we need to follow redirects to get the actual video URL
+        val connection = java.net.URL(urlString).openConnection() as java.net.HttpURLConnection
+        connection.instanceFollowRedirects = true
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+
         try {
-            Log.d("VideoPlayerFragment", "Releasing player")
-            player?.let { exoPlayer ->
-                // Save position first
-                playbackPosition = exoPlayer.currentPosition
-                playWhenReady = exoPlayer.playWhenReady
+            connection.connect()
 
-                // Properly stop playback
-                exoPlayer.playWhenReady = false
-                exoPlayer.pause()
-                exoPlayer.stop()
-                exoPlayer.clearMediaItems()
-                exoPlayer.release()
+            // If we have redirects, follow them
+            val responseCode = connection.responseCode
+            Log.d("VideoPlayerFragment", "Response code: $responseCode")
 
-                Log.d("VideoPlayerFragment", "Player released successfully")
+            if (responseCode == java.net.HttpURLConnection.HTTP_OK) {
+                // We have the final URL
+                val finalUrl = connection.url.toString()
+                Log.d("VideoPlayerFragment", "Final URL: $finalUrl")
+                return finalUrl
+            } else if (responseCode == java.net.HttpURLConnection.HTTP_MOVED_TEMP ||
+                      responseCode == java.net.HttpURLConnection.HTTP_MOVED_PERM ||
+                      responseCode == java.net.HttpURLConnection.HTTP_SEE_OTHER) {
+
+                // Get the redirect URL
+                val location = connection.getHeaderField("Location")
+                Log.d("VideoPlayerFragment", "Redirected to: $location")
+                return resolveRedirectUrl(location)
+            } else {
+                throw Exception("Unexpected response code: $responseCode")
             }
-            player = null
-
-            // Clear any handlers to prevent further updates
-            progressHandler.removeCallbacksAndMessages(null)
-            controlsHideHandler.removeCallbacksAndMessages(null)
-        } catch (e: Exception) {
-            Log.e("VideoPlayerFragment", "Error releasing player: ${e.message}")
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -741,5 +804,32 @@ class VideoPlayerFragment : Fragment(), GestureDetector.OnGestureListener,
     private fun showToast(message: String) {
         if (!isAdded) return // Check if fragment is attached
         Toast.makeText(requireContext(), message, Toast.LENGTH_SHORT).show()
+    }
+
+    fun releasePlayer() {
+        try {
+            Log.d("VideoPlayerFragment", "Releasing player")
+            player?.let { exoPlayer ->
+                // Save position first
+                playbackPosition = exoPlayer.currentPosition
+                playWhenReady = exoPlayer.playWhenReady
+
+                // Properly stop playback
+                exoPlayer.playWhenReady = false
+                exoPlayer.pause()
+                exoPlayer.stop()
+                exoPlayer.clearMediaItems()
+                exoPlayer.release()
+
+                Log.d("VideoPlayerFragment", "Player released successfully")
+            }
+            player = null
+
+            // Clear any handlers to prevent further updates
+            progressHandler.removeCallbacksAndMessages(null)
+            controlsHideHandler.removeCallbacksAndMessages(null)
+        } catch (e: Exception) {
+            Log.e("VideoPlayerFragment", "Error releasing player: ${e.message}")
+        }
     }
 }

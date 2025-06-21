@@ -7,6 +7,7 @@ import com.blank.anime.model.AniListUser
 import com.blank.anime.model.AniListRecommendation
 import com.blank.anime.model.AniListMediaStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -431,10 +432,13 @@ class AniListApiClient(private val accessToken: String? = null) {
     private suspend fun executeQuery(query: String, variables: String? = null): JSONObject? {
         return withContext(Dispatchers.IO) {
             try {
+                Log.d("AniListApiClient", "Executing GraphQL query: ${query.take(100)}...")
+
                 val requestBody = JSONObject().apply {
                     put("query", query)
                     if (variables != null) {
                         put("variables", JSONObject(variables))
+                        Log.d("AniListApiClient", "With variables: $variables")
                     }
                 }.toString().toRequestBody(contentType)
 
@@ -444,10 +448,12 @@ class AniListApiClient(private val accessToken: String? = null) {
                     .apply {
                         accessToken?.let {
                             header("Authorization", "Bearer $it")
+                            Log.d("AniListApiClient", "Request includes Authorization header")
                         }
                     }
                     .build()
 
+                Log.d("AniListApiClient", "Sending request to $baseUrl")
                 val response = client.newCall(request).execute()
                 val responseBody = response.body?.string()
 
@@ -455,6 +461,8 @@ class AniListApiClient(private val accessToken: String? = null) {
                     Log.e("AniListApiClient", "Request failed: ${response.code}, ${response.message}")
                     return@withContext null
                 }
+
+                Log.d("AniListApiClient", "Received successful response with ${responseBody.length} characters")
 
                 val jsonObject = JSONObject(responseBody)
 
@@ -468,12 +476,15 @@ class AniListApiClient(private val accessToken: String? = null) {
                     }
                 }
 
-                jsonObject.optJSONObject("data")
+                val data = jsonObject.optJSONObject("data")
+                Log.d("AniListApiClient", "Response data object present: ${data != null}")
+
+                return@withContext data
             } catch (e: IOException) {
-                Log.e("AniListApiClient", "Network error: ${e.message}")
+                Log.e("AniListApiClient", "Network error: ${e.message}", e)
                 null
             } catch (e: JSONException) {
-                Log.e("AniListApiClient", "JSON parsing error: ${e.message}")
+                Log.e("AniListApiClient", "JSON parsing error: ${e.message}", e)
                 null
             }
         }

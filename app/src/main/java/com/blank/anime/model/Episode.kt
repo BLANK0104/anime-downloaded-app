@@ -10,5 +10,6 @@ data class Episode(
     val description: String? = null,
     val thumbnail: String? = null,
     val url: String? = null,
-    val isDownloaded: Boolean = false
+    val isDownloaded: Boolean = false,
+    val isAvailable: Boolean = true  // Default to true for backward compatibility
 )

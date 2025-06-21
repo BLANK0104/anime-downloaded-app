@@ -247,10 +247,14 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
     }
 
     private fun loadDownloads() {
+        Log.d("DownloadsFragment", "Starting to load downloads...")
+
         if (!storageManager.hasStorageDirectorySet()) {
+            Log.e("DownloadsFragment", "No storage directory set")
             showStoragePermissionNeededMessage()
             return
         }
+        Log.d("DownloadsFragment", "Storage directory is set")
 
         binding.downloadProgressBar.visibility = View.VISIBLE
         binding.downloadsRecycler.visibility = View.GONE
@@ -262,20 +266,26 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
         // Get the storage directory URI
         val storageUri = storageManager.getStorageDirectoryUri()
         if (storageUri == null) {
+            Log.e("DownloadsFragment", "Storage URI is null")
             binding.noDownloadsText.visibility = View.VISIBLE
             binding.noDownloadsText.text = "Storage location not found"
             binding.downloadProgressBar.visibility = View.GONE
             return
         }
+        Log.d("DownloadsFragment", "Storage URI: $storageUri")
 
         // Load downloads from the storage directory instead of DownloadManager
         try {
             // Get all anime titles from storage
+            Log.d("DownloadsFragment", "Getting anime titles from storage...")
             val animeTitles = getAnimeFromStorage()
+            Log.d("DownloadsFragment", "Found ${animeTitles.size} anime titles: $animeTitles")
 
             // For each anime, get all episodes
             for (animeTitle in animeTitles) {
+                Log.d("DownloadsFragment", "Getting episodes for anime: $animeTitle")
                 val episodes = storageManager.getAnimeEpisodes(animeTitle)
+                Log.d("DownloadsFragment", "Found ${episodes.size} episodes for $animeTitle")
 
                 for (episode in episodes) {
                     val downloadItem = DownloadItem(
@@ -292,14 +302,16 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
                     )
 
                     allDownloads.add(downloadItem)
+                    Log.d("DownloadsFragment", "Added episode to downloads list: ${animeTitle} - Episode ${episode.episodeNumber}")
                 }
             }
 
             // Also check DownloadManager for any in-progress downloads
+            Log.d("DownloadsFragment", "Checking DownloadManager for active downloads...")
             checkDownloadManagerForActiveDownloads()
 
         } catch (e: Exception) {
-            Log.e("DownloadsFragment", "Error loading downloads: ${e.message}")
+            Log.e("DownloadsFragment", "Error loading downloads: ${e.message}", e)
             binding.noDownloadsText.visibility = View.VISIBLE
             binding.noDownloadsText.text = "Error loading downloads: ${e.message}"
             binding.downloadProgressBar.visibility = View.GONE
@@ -307,12 +319,16 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
         }
 
         // Group downloads by anime title
+        Log.d("DownloadsFragment", "Updating anime list with ${allDownloads.size} total downloads")
         updateAnimeList()
+        Log.d("DownloadsFragment", "Anime list updated, contains ${animeList.size} anime entries")
 
         // Check if there are any downloads to show
         if (allDownloads.isEmpty()) {
+            Log.d("DownloadsFragment", "No downloads found, showing message")
             binding.noDownloadsText.visibility = View.VISIBLE
         } else {
+            Log.d("DownloadsFragment", "Downloads found, showing recycler view")
             binding.downloadsRecycler.visibility = View.VISIBLE
         }
 
@@ -321,26 +337,12 @@ class DownloadsFragment : Fragment(), VideoPlayerFragment.EpisodeNavigationListe
 
     private fun getAnimeFromStorage(): List<String> {
         try {
-            // Get the storage directory URI
-            val storageUri = storageManager.getStorageDirectoryUri() ?: return emptyList()
-
-            // Get the "Anime" directory from the storage directory
-            val animeDir = storageManager.getAnimeDirectory() ?: return emptyList()
-
-            // Get all subdirectories (anime titles)
-            val animeTitles = mutableListOf<String>()
-
-            animeDir.listFiles().forEach { file ->
-                if (file.isDirectory) {
-                    file.name?.let { name ->
-                        animeTitles.add(name)
-                    }
-                }
+            // Use the new helper method in StorageManager
+            return storageManager.getAllDownloadedAnimeTitles().also {
+                Log.d("DownloadsFragment", "Found ${it.size} anime titles with downloads: $it")
             }
-
-            return animeTitles
         } catch (e: Exception) {
-            Log.e("DownloadsFragment", "Error getting anime from storage: ${e.message}")
+            Log.e("DownloadsFragment", "Error getting anime from storage: ${e.message}", e)
             return emptyList()
         }
     }

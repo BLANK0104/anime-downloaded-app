@@ -99,108 +99,37 @@ class AnimeViewModel : ViewModel() {
                     episodeNumber = downloadResponse.episode,
                     progress = 0,
                     isComplete = false,
-                    uri = null
+                    url = downloadResponse.download_link
                 )
 
+                // Use Android's DownloadManager to handle the download
+                val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val request = DownloadManager.Request(Uri.parse(downloadResponse.download_link))
+                    .setTitle("${downloadResponse.anime_title} - Episode ${downloadResponse.episode}")
+                    .setDescription("Downloading episode in ${downloadResponse.quality}p")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_DOWNLOADS,
+                        "Anime/${downloadResponse.anime_title}/Episode_${downloadResponse.episode}_${downloadResponse.quality}p_${downloadResponse.language}.mp4"
+                    )
+
+                downloadManager.enqueue(request)
+
+                // Update download progress status
+                _downloadProgress.value = _downloadProgress.value?.copy(isComplete = true, progress = 100)
+
+                // Store download information in StorageManager for tracking
                 val storageManager = StorageManager.getInstance(context)
-
-                // Check if storage permission is granted
-                if (!storageManager.hasStorageDirectorySet()) {
-                    _error.value = "Storage permission not granted. Please select a storage directory first."
-                    _downloadProgress.value = DownloadProgress(
-                        animeTitle = downloadResponse.anime_title,
-                        episodeNumber = downloadResponse.episode,
-                        progress = 0,
-                        isComplete = false,
-                        error = "Storage permission required"
-                    )
-                    return@launch
-                }
-
-                // Prepare anime folder
-                val animeFolder = storageManager.createAnimeFolder(downloadResponse.anime_title)
-                if (animeFolder == null) {
-                    _error.value = "Failed to create folder for ${downloadResponse.anime_title}"
-                    _downloadProgress.value = DownloadProgress(
-                        animeTitle = downloadResponse.anime_title,
-                        episodeNumber = downloadResponse.episode,
-                        progress = 0,
-                        isComplete = false,
-                        error = "Failed to create anime folder"
-                    )
-                    return@launch
-                }
-
-                // Download the file
-                val uri = withContext(Dispatchers.IO) {
-                    try {
-                        val url = URL(downloadResponse.download_link)
-                        val connection = url.openConnection() as HttpURLConnection
-                        connection.connectTimeout = 30000
-                        connection.readTimeout = 30000
-                        connection.connect()
-
-                        val contentLength = connection.contentLength
-                        val inputStream = connection.inputStream
-
-                        // Use a buffered input stream with progress reporting
-                        val progressInputStream = ProgressInputStream(
-                            inputStream = inputStream,
-                            contentLength = contentLength,
-                            onProgressChanged = { progress ->
-                                _downloadProgress.postValue(
-                                    DownloadProgress(
-                                        animeTitle = downloadResponse.anime_title,
-                                        episodeNumber = downloadResponse.episode,
-                                        progress = progress,
-                                        isComplete = false
-                                    )
-                                )
-                            }
-                        )
-
-                        // Save the file
-                        storageManager.saveEpisodeFile(
-                            inputStream = progressInputStream,
-                            animeTitle = downloadResponse.anime_title,
-                            episodeNumber = downloadResponse.episode,
-                            quality = downloadResponse.quality,
-                            language = downloadResponse.language
-                        )
-                    } catch (e: Exception) {
-                        Log.e("AnimeViewModel", "Download error: ${e.message}")
-                        _error.postValue("Download failed: ${e.message}")
-                        null
-                    }
-                }
-
-                // Update with the result
-                if (uri != null) {
-                    _downloadProgress.value = DownloadProgress(
-                        animeTitle = downloadResponse.anime_title,
-                        episodeNumber = downloadResponse.episode,
-                        progress = 100,
-                        isComplete = true,
-                        uri = uri
-                    )
-                } else {
-                    _downloadProgress.value = DownloadProgress(
-                        animeTitle = downloadResponse.anime_title,
-                        episodeNumber = downloadResponse.episode,
-                        progress = 0,
-                        isComplete = false,
-                        error = "Download failed"
-                    )
-                }
-            } catch (e: Exception) {
-                _error.value = "Download failed: ${e.message}"
-                _downloadProgress.value = DownloadProgress(
+                storageManager.saveEpisode(
                     animeTitle = downloadResponse.anime_title,
                     episodeNumber = downloadResponse.episode,
-                    progress = 0,
-                    isComplete = false,
-                    error = e.message
+                    quality = downloadResponse.quality,
+                    language = downloadResponse.language,
+                    filePath = "Anime/${downloadResponse.anime_title}/Episode_${downloadResponse.episode}_${downloadResponse.quality}p_${downloadResponse.language}.mp4"
                 )
+            } catch (e: Exception) {
+                _error.value = "Download error: ${e.message}"
+                _downloadProgress.value = _downloadProgress.value?.copy(isComplete = false)
             }
         }
     }
@@ -239,7 +168,8 @@ class AnimeViewModel : ViewModel() {
         val progress: Int,
         val isComplete: Boolean,
         val uri: Uri? = null,
-        val error: String? = null
+        val error: String? = null,
+        val url: String? = null
     )
 
     /**

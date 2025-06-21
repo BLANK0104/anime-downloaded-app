@@ -175,6 +175,62 @@ class StorageManager(private val context: Context) {
     }
 
     /**
+     * Saves information about downloaded episode for later tracking
+     */
+    fun saveEpisode(
+        animeTitle: String,
+        episodeNumber: Int,
+        quality: Int,
+        language: String,
+        filePath: String
+    ) {
+        try {
+            // Store episode information in SharedPreferences
+            val episodeKey = "anime_${animeTitle.replace(" ", "_")}_ep_$episodeNumber"
+            val episodeInfo = mapOf(
+                "title" to animeTitle,
+                "episode" to episodeNumber.toString(),
+                "quality" to quality.toString(),
+                "language" to language,
+                "path" to filePath,
+                "timestamp" to System.currentTimeMillis().toString()
+            )
+
+            // Convert map to JSON-like string for storage
+            val episodeInfoString = episodeInfo.entries.joinToString(separator = ",") {
+                "${it.key}:${it.value}"
+            }
+
+            prefs.edit().putString(episodeKey, episodeInfoString).apply()
+            Log.d("StorageManager", "Saved episode info: $animeTitle Episode $episodeNumber")
+        } catch (e: Exception) {
+            Log.e("StorageManager", "Error saving episode info: ${e.message}")
+        }
+    }
+
+    /**
+     * Check if an episode exists
+     */
+    fun episodeExists(animeTitle: String, episodeNumber: Int): Boolean {
+        val episodeKey = "anime_${animeTitle.replace(" ", "_")}_ep_$episodeNumber"
+        return prefs.contains(episodeKey)
+    }
+
+    /**
+     * Gets the file path for a downloaded episode
+     */
+    fun getEpisodePath(animeTitle: String, episodeNumber: Int): String? {
+        val episodeKey = "anime_${animeTitle.replace(" ", "_")}_ep_$episodeNumber"
+        val episodeInfoString = prefs.getString(episodeKey, null) ?: return null
+
+        // Parse the info string to get the path
+        val pathEntry = episodeInfoString.split(",")
+            .find { it.startsWith("path:") }
+
+        return pathEntry?.substringAfter("path:")
+    }
+
+    /**
      * Gets all episodes for a specific anime
      */
     fun getAnimeEpisodes(animeTitle: String): List<EpisodeFile> {
@@ -183,23 +239,47 @@ class StorageManager(private val context: Context) {
             val storageUri = getStorageDirectoryUri() ?: return episodes
             val rootDir = DocumentFile.fromTreeUri(context, storageUri) ?: return episodes
 
-            val animeDir = rootDir.findFile("Anime") ?: return episodes
-            val sanitizedTitle = sanitizeFilename(animeTitle)
-            val animeSpecificDir = animeDir.findFile(sanitizedTitle) ?: return episodes
+            // Check if root directory is already the "Anime" folder
+            val animeSpecificDir = if (rootDir.name == "Anime" || storageUri.toString().endsWith("Anime")) {
+                // If so, look for the anime title as a direct subdirectory
+                Log.d("StorageManager", "Finding episodes in root/animeTitle: $animeTitle")
+                rootDir.listFiles().find { it.isDirectory && it.name == animeTitle }
+            } else {
+                // Otherwise use the old approach (Anime/animeTitle)
+                Log.d("StorageManager", "Finding episodes in root/Anime/animeTitle: $animeTitle")
+                val animeDir = rootDir.findFile("Anime") ?: return episodes
+                val sanitizedTitle = sanitizeFilename(animeTitle)
+                animeDir.findFile(sanitizedTitle)
+            }
+
+            if (animeSpecificDir == null) {
+                Log.e("StorageManager", "Anime directory for $animeTitle not found")
+                return episodes
+            }
+
+            Log.d("StorageManager", "Found anime directory: ${animeSpecificDir.name}, looking for episodes")
 
             // Get all MP4 files in the directory
             val episodeFiles = animeSpecificDir.listFiles().filter {
                 it.name?.endsWith(".mp4", ignoreCase = true) == true
             }
 
+            Log.d("StorageManager", "Found ${episodeFiles.size} MP4 files in ${animeSpecificDir.name}")
+
             // Extract episode information from filenames
             for (file in episodeFiles) {
                 val name = file.name ?: continue
+                Log.d("StorageManager", "Processing file: $name")
 
                 // Parse the episode number from the filename
                 val episodePattern = "Episode_(\\d+)_".toRegex()
                 val episodeMatch = episodePattern.find(name)
-                val episodeNumber = episodeMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: continue
+                val episodeNumber = episodeMatch?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+                if (episodeNumber == null) {
+                    Log.d("StorageManager", "Could not extract episode number from $name")
+                    continue
+                }
 
                 // Parse the quality from the filename
                 val qualityPattern = "(\\d+)p".toRegex()
@@ -214,23 +294,18 @@ class StorageManager(private val context: Context) {
                     lastModified = file.lastModified(),
                     fileSize = file.length()
                 ))
+                Log.d("StorageManager", "Added episode $episodeNumber from $name")
             }
 
             // Sort by episode number
             episodes.sortBy { it.episodeNumber }
+            Log.d("StorageManager", "Final episode list for $animeTitle: ${episodes.map { it.episodeNumber }}")
 
         } catch (e: Exception) {
-            Log.e("StorageManager", "Error getting anime episodes: ${e.message}")
+            Log.e("StorageManager", "Error getting anime episodes: ${e.message}", e)
         }
 
         return episodes
-    }
-
-    /**
-     * Check if an episode exists
-     */
-    fun episodeExists(animeTitle: String, episodeNumber: Int): Boolean {
-        return getAnimeEpisodes(animeTitle).any { it.episodeNumber == episodeNumber }
     }
 
     /**
@@ -254,7 +329,7 @@ class StorageManager(private val context: Context) {
     fun findPreviousEpisode(animeTitle: String, currentEpisode: Int): EpisodeFile? {
         val episodes = getAnimeEpisodes(animeTitle)
         return episodes.filter { it.episodeNumber < currentEpisode }
-                       .maxByOrNull { it.episodeNumber }
+            .maxByOrNull { it.episodeNumber }
     }
 
     /**
@@ -279,8 +354,21 @@ class StorageManager(private val context: Context) {
             val storageUri = getStorageDirectoryUri() ?: return null
             val rootDir = DocumentFile.fromTreeUri(context, storageUri) ?: return null
 
-            // Get Anime folder
-            return rootDir.findFile("Anime") ?: return null
+            // Check if root directory itself is named "Anime"
+            if (rootDir.name == "Anime" || storageUri.toString().endsWith("Anime")) {
+                Log.d("StorageManager", "Selected directory is already the Anime folder")
+                return rootDir
+            }
+
+            // Otherwise, look for "Anime" subfolder
+            val animeDir = rootDir.findFile("Anime")
+            if (animeDir != null) {
+                return animeDir
+            }
+
+            // If neither condition is met, log an error
+            Log.e("StorageManager", "Anime directory not found in storage")
+            return null
         } catch (e: Exception) {
             Log.e("StorageManager", "Error getting Anime directory: ${e.message}")
             return null
@@ -332,4 +420,92 @@ class StorageManager(private val context: Context) {
         val lastModified: Long,
         val fileSize: Long
     )
+
+    /**
+     * Gets all anime titles with downloaded content
+     */
+    fun getAllDownloadedAnimeTitles(): List<String> {
+        Log.d("StorageManager", "Getting all downloaded anime titles...")
+
+        // Check if storage URI exists
+        val storageUri = getStorageDirectoryUri()
+        if (storageUri == null) {
+            Log.e("StorageManager", "Storage URI is null")
+            return emptyList()
+        }
+        Log.d("StorageManager", "Storage URI: $storageUri")
+
+        // Get the root directory
+        val rootDir = DocumentFile.fromTreeUri(context, storageUri)
+        if (rootDir == null) {
+            Log.e("StorageManager", "Root directory is null")
+            return emptyList()
+        }
+        Log.d("StorageManager", "Root directory exists: ${rootDir.exists()}, name: ${rootDir.name}, isDirectory: ${rootDir.isDirectory}")
+
+        // Check if root directory is already the "Anime" folder
+        if (rootDir.name == "Anime" || storageUri.toString().endsWith("Anime")) {
+            Log.d("StorageManager", "Selected directory is already the Anime folder - using subdirectories as anime titles")
+            val titles = mutableListOf<String>()
+
+            try {
+                rootDir.listFiles().forEach { file ->
+                    if (file.isDirectory && file.name != null) {
+                        Log.d("StorageManager", "Found anime directory: ${file.name}")
+                        titles.add(file.name!!)
+
+                        // Check how many episodes this anime directory contains
+                        val episodeCount = file.listFiles().count {
+                            it.name?.endsWith(".mp4", ignoreCase = true) == true
+                        }
+                        Log.d("StorageManager", "Anime ${file.name} has $episodeCount episodes")
+                    }
+                }
+
+                Log.d("StorageManager", "Found anime titles from root: $titles")
+                return titles
+            } catch (e: Exception) {
+                Log.e("StorageManager", "Error getting anime titles from root: ${e.message}", e)
+                return emptyList()
+            }
+        }
+
+        // Otherwise, use the old approach (looking for an "Anime" subfolder)
+        val animeDir = rootDir.findFile("Anime")
+        if (animeDir == null) {
+            Log.e("StorageManager", "Anime directory not found. Checking root content:")
+            rootDir.listFiles().forEach {
+                Log.d("StorageManager", "Found in root: ${it.name}, isDirectory: ${it.isDirectory}")
+            }
+            return emptyList()
+        }
+        Log.d("StorageManager", "Anime directory exists: ${animeDir.exists()}, name: ${animeDir.name}, isDirectory: ${animeDir.isDirectory}")
+
+        val titles = mutableListOf<String>()
+
+        try {
+            // Get all subdirectories (anime titles)
+            val files = animeDir.listFiles()
+            Log.d("StorageManager", "Found ${files.size} items in Anime directory")
+
+            files.forEach { file ->
+                Log.d("StorageManager", "Checking item: ${file.name}, isDirectory: ${file.isDirectory}")
+
+                if (file.isDirectory && file.name != null) {
+                    titles.add(file.name!!)
+                    Log.d("StorageManager", "Added anime title: ${file.name}")
+
+                    // Check for episodes in this folder
+                    val episodeFiles = file.listFiles().filter { it.name?.endsWith(".mp4", ignoreCase = true) == true }
+                    Log.d("StorageManager", "Found ${episodeFiles.size} episode files in ${file.name}")
+                }
+            }
+
+            Log.d("StorageManager", "Final list of anime titles: $titles")
+        } catch (e: Exception) {
+            Log.e("StorageManager", "Error getting anime titles: ${e.message}", e)
+        }
+
+        return titles
+    }
 }

@@ -2,6 +2,7 @@ package com.blank.anime.ui
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -52,12 +53,23 @@ class HomeFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        // Show loading indicator immediately
+        binding.loadingIndicator.visibility = View.VISIBLE
+
+        // Add logging
+        Log.d("HomeFragment", "onViewCreated: Initializing HomeFragment")
+
         // Initialize ViewModel
         viewModel = ViewModelProvider(requireActivity())[AniListViewModel::class.java]
+        Log.d("HomeFragment", "onViewCreated: ViewModel initialized")
 
         setupAdapters()
         setupObservers()
         setupListeners()
+
+        // Explicitly refresh data
+        Log.d("HomeFragment", "onViewCreated: Explicitly refreshing data")
+        viewModel.refreshAllData()
 
         // Handle potential OAuth redirect
         handleIntent(requireActivity().intent)
@@ -248,27 +260,42 @@ class HomeFragment : Fragment() {
     }
 
     private fun updateTrendingAnime(animeList: List<AniListMedia>) {
+        Log.d("HomeFragment", "updateTrendingAnime: received ${animeList.size} items")
         val isVisible = animeList.isNotEmpty()
+
         binding.trendingTitle.visibility = if (isVisible) View.VISIBLE else View.GONE
         binding.trendingRecycler.visibility = if (isVisible) View.VISIBLE else View.GONE
 
-        trendingAdapter.submitList(animeList)
+        if (isVisible) {
+            Log.d("HomeFragment", "updateTrendingAnime: showing section with ${animeList.size} items")
+            trendingAdapter.submitList(animeList)
+        }
     }
 
     private fun updatePopularSeasonalAnime(animeList: List<AniListMedia>) {
+        Log.d("HomeFragment", "updatePopularSeasonalAnime: received ${animeList.size} items")
         val isVisible = animeList.isNotEmpty()
+
         binding.popularThisSeasonTitle.visibility = if (isVisible) View.VISIBLE else View.GONE
         binding.popularThisSeasonRecycler.visibility = if (isVisible) View.VISIBLE else View.GONE
 
-        popularSeasonalAdapter.submitList(animeList)
+        if (isVisible) {
+            Log.d("HomeFragment", "updatePopularSeasonalAnime: showing section with ${animeList.size} items")
+            popularSeasonalAdapter.submitList(animeList)
+        }
     }
 
     private fun updatePopularAllTimeAnime(animeList: List<AniListMedia>) {
+        Log.d("HomeFragment", "updatePopularAllTimeAnime: received ${animeList.size} items")
         val isVisible = animeList.isNotEmpty()
+
         binding.allTimePopularTitle.visibility = if (isVisible) View.VISIBLE else View.GONE
         binding.allTimePopularRecycler.visibility = if (isVisible) View.VISIBLE else View.GONE
 
-        popularAllTimeAdapter.submitList(animeList)
+        if (isVisible) {
+            Log.d("HomeFragment", "updatePopularAllTimeAnime: showing section with ${animeList.size} items")
+            popularAllTimeAdapter.submitList(animeList)
+        }
     }
 
     private fun updateRecommendations(recommendations: List<AniListRecommendation>) {
@@ -282,11 +309,22 @@ class HomeFragment : Fragment() {
     }
 
     private fun navigateToAnimeDetails(anime: AniListMedia) {
-        // TODO: Navigate to anime details using NavController
-        // findNavController().navigate(
-        //     HomeFragmentDirections.actionHomeFragmentToAnimeDetailsFragment(anime.id)
-        // )
-        showSnackbar("Viewing anime: ${anime.getPreferredTitle()}")
+        Log.d("HomeFragment", "Navigating to anime details for: ${anime.getPreferredTitle()}")
+
+        // Create the bundle with all required arguments
+        val bundle = Bundle().apply {
+            putString("session_id", anime.id.toString())
+            putString("anime_id", anime.id.toString())
+            putString("anime_title", anime.getPreferredTitle())
+            putInt("total_episodes", anime.episodes)
+
+            // Log the bundle contents for debugging
+            Log.d("HomeFragment", "Bundle created: anime_id=${getString("anime_id")}, anime_title=${getString("anime_title")}, total_episodes=${getInt("total_episodes")}, session_id=${getString("session_id")}")
+        }
+
+        // Navigate to anime details with arguments
+        findNavController().navigate(R.id.action_homeFragment_to_animeDetailsFragment, bundle)
+        Log.d("HomeFragment", "Navigation action completed")
     }
 
     private fun navigateToSettings() {
@@ -298,11 +336,9 @@ class HomeFragment : Fragment() {
     }
 
     private fun performSearch(query: String) {
-        // TODO: Navigate to search results using NavController
-        // findNavController().navigate(
-        //     HomeFragmentDirections.actionHomeFragmentToSearchResultsFragment(query)
-        // )
-        showSnackbar("Searching for: $query")
+        Log.d("HomeFragment", "Searching for: $query")
+        // Using resource ID for navigation since Safe Args might not be set up
+        findNavController().navigate(R.id.action_homeFragment_to_searchFragment)
     }
 
     private fun showSnackbar(message: String) {

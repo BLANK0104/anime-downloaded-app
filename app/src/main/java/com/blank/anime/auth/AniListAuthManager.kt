@@ -7,6 +7,8 @@ import android.util.Log
 import androidx.browser.customtabs.CustomTabsIntent
 import com.blank.anime.R
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.openid.appauth.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -52,19 +54,77 @@ class AniListAuthManager(private val context: Context) {
     fun isLoggedIn(): Boolean {
         val accessToken = prefs.getString(KEY_ACCESS_TOKEN, null)
         val expiresAt = prefs.getLong(KEY_EXPIRES_AT, 0)
+        val refreshToken = prefs.getString(KEY_REFRESH_TOKEN, null)
+
+        // If token is expired but we have a refresh token, try to refresh silently
+        if (accessToken != null && System.currentTimeMillis() >= expiresAt && refreshToken != null) {
+            Log.d(TAG, "Token expired but refresh token exists, attempting silent refresh")
+            // We don't block here, but initiate a refresh in the background
+            refreshTokenSilently(refreshToken)
+            // We'll still return false for now, but next check should succeed if refresh works
+            return false
+        }
+
         val isValid = accessToken != null && System.currentTimeMillis() < expiresAt
         Log.d(TAG, "isLoggedIn check: accessToken exists = ${accessToken != null}, " +
                 "expires at = ${java.util.Date(expiresAt)}, isValid = $isValid")
         return isValid
     }
 
-    // Get the current access token (if any)
-    fun getAccessToken(): String? {
-        val token = if (isLoggedIn()) {
-            prefs.getString(KEY_ACCESS_TOKEN, null)
-        } else {
-            null
+    // Try to refresh the token silently in the background
+    private fun refreshTokenSilently(refreshToken: String) {
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val response = refreshAccessToken(refreshToken)
+                if (response.first != null) {
+                    Log.d(TAG, "Silent token refresh successful")
+                } else {
+                    Log.e(TAG, "Silent token refresh failed")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during silent token refresh: ${e.message}")
+            }
         }
+    }
+
+    // Check if token will expire soon (within 1 hour)
+    fun tokenWillExpireSoon(): Boolean {
+        val expiresAt = prefs.getLong(KEY_EXPIRES_AT, 0)
+        val oneHourFromNow = System.currentTimeMillis() + (60 * 60 * 1000)
+        return expiresAt > 0 && expiresAt < oneHourFromNow
+    }
+
+    // Get the current access token (if any), refreshing if needed
+    fun getAccessToken(): String? {
+        if (!isLoggedIn()) {
+            Log.d(TAG, "getAccessToken: Not logged in")
+            return null
+        }
+
+        // Check if token will expire soon, refresh if needed
+        if (tokenWillExpireSoon()) {
+            Log.d(TAG, "Token will expire soon, attempting to refresh")
+            val refreshToken = prefs.getString(KEY_REFRESH_TOKEN, null)
+            if (refreshToken != null) {
+                try {
+                    // Use runBlocking to call the suspend function from a synchronous context
+                    val response = kotlinx.coroutines.runBlocking {
+                        refreshAccessToken(refreshToken)
+                    }
+                    if (response.first != null) {
+                        Log.d(TAG, "Token refreshed successfully")
+                        // Return the new token
+                        return response.first
+                    } else {
+                        Log.e(TAG, "Token refresh failed")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error refreshing token: ${e.message}")
+                }
+            }
+        }
+
+        val token = prefs.getString(KEY_ACCESS_TOKEN, null)
         Log.d(TAG, "getAccessToken: token exists = ${token != null}")
         return token
     }
@@ -302,6 +362,80 @@ class AniListAuthManager(private val context: Context) {
                 Log.e(TAG, "Exception details: ${e.javaClass.name}: ${e.message}")
                 e.printStackTrace()
                 return@withContext false
+            }
+        }
+    }
+
+    // Refresh an access token using a refresh token
+    suspend fun refreshAccessToken(refreshToken: String): Pair<String?, String?> {
+        Log.d(TAG, "Refreshing access token with refresh token")
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = ANILIST_TOKEN_ENDPOINT
+                val client = okhttp3.OkHttpClient.Builder().build()
+
+                // Create request body with required OAuth parameters for refresh
+                val requestBody = okhttp3.FormBody.Builder()
+                    .add("grant_type", "refresh_token")
+                    .add("client_id", clientId)
+                    .add("client_secret", CLIENT_SECRET)
+                    .add("refresh_token", refreshToken)
+                    .build()
+
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .post(requestBody)
+                    .header("Accept", "application/json")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .build()
+
+                Log.d(TAG, "Sending refresh token request to: $url")
+
+                val response = client.newCall(request).execute()
+                val responseCode = response.code
+                val responseBody = response.body?.string()
+
+                Log.d(TAG, "Refresh token response code: $responseCode")
+
+                if (!response.isSuccessful || responseBody == null) {
+                    Log.e(TAG, "Failed to refresh token: code=$responseCode")
+                    Log.e(TAG, "Response body: $responseBody")
+                    return@withContext Pair(null, null)
+                }
+
+                Log.d(TAG, "Refresh token response received")
+
+                // Parse the JSON response
+                val jsonObject = JSONObject(responseBody)
+                val accessToken = jsonObject.optString("access_token", null)
+                val newRefreshToken = jsonObject.optString("refresh_token", null)
+                val expiresIn = jsonObject.optLong("expires_in", 0)
+
+                if (accessToken != null) {
+                    // Save tokens to SharedPreferences
+                    val expiresAt = System.currentTimeMillis() + (expiresIn * 1000)
+
+                    prefs.edit().apply {
+                        putString(KEY_ACCESS_TOKEN, accessToken)
+                        if (!newRefreshToken.isNullOrEmpty()) {
+                            putString(KEY_REFRESH_TOKEN, newRefreshToken)
+                        }
+                        putLong(KEY_EXPIRES_AT, expiresAt)
+                        apply()
+                    }
+
+                    Log.d(TAG, "Token refreshed successfully, expires at: ${java.util.Date(expiresAt)}")
+                    return@withContext Pair(accessToken, newRefreshToken ?: refreshToken)
+                } else {
+                    Log.e(TAG, "Access token is null in refresh response")
+                    return@withContext Pair(null, null)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error refreshing token", e)
+                Log.e(TAG, "Exception details: ${e.javaClass.name}: ${e.message}")
+                e.printStackTrace()
+                return@withContext Pair(null, null)
             }
         }
     }

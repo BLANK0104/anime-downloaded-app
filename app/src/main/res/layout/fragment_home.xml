@@ -291,6 +291,60 @@
                 tools:itemCount="5"
                 tools:listitem="@layout/item_anime_poster" />
 
+            <!-- Popular This Season section -->
+            <TextView
+                android:id="@+id/popular_this_season_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_marginTop="24dp"
+                android:text="Popular This Season"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/plan_to_watch_recycler" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/popular_this_season_recycler"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:clipToPadding="false"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
+                app:layout_constraintTop_toBottomOf="@id/popular_this_season_title"
+                tools:itemCount="5"
+                tools:listitem="@layout/item_anime_poster" />
+
+            <!-- All Time Popular section -->
+            <TextView
+                android:id="@+id/all_time_popular_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_marginTop="24dp"
+                android:text="All Time Popular"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/popular_this_season_recycler" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/all_time_popular_recycler"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:clipToPadding="false"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
+                app:layout_constraintTop_toBottomOf="@id/all_time_popular_title"
+                tools:itemCount="5"
+                tools:listitem="@layout/item_anime_poster" />
+
             <!-- Loading indicator and empty states -->
             <ProgressBar
                 android:id="@+id/loading_indicator"

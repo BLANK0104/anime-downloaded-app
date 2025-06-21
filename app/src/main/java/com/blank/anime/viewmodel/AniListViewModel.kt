@@ -58,11 +58,11 @@ class AniListViewModel(application: Application) : AndroidViewModel(application)
     val popularAllTimeAnime: LiveData<List<AniListMedia>> = _popularAllTimeAnime
 
     // Loading and error states
-    private val _isLoading = MutableLiveData<Boolean>()
-    val isLoading: LiveData<Boolean> = _isLoading
-
     private val _errorMessage = MutableLiveData<String?>()
     val errorMessage: LiveData<String?> = _errorMessage
+
+    private val _isLoading = MutableLiveData<Boolean>()
+    val isLoading: LiveData<Boolean> = _isLoading
 
     init {
         // Initialize API client if user is logged in
@@ -162,35 +162,237 @@ class AniListViewModel(application: Application) : AndroidViewModel(application)
      * Refresh all AniList data
      */
     fun refreshAllData() {
-        if (!authManager.isLoggedIn()) {
-            loadTrendingAnime()
-            loadPopularSeasonalAnime()
-            loadPopularAllTimeAnime()
-            return
+        Log.d(TAG, "refreshAllData: Starting to refresh all data")
+
+        // First, make sure we have a valid API client
+        if (apiClient == null) {
+            apiClient = AniListApiClient(authManager.getAccessToken())
+            Log.d(TAG, "refreshAllData: Created new API client")
+        } else {
+            Log.d(TAG, "refreshAllData: Using existing API client")
         }
 
-        loadUserProfile()
-        loadUserCollection()
-        loadTrendingAnime()
-        loadPopularSeasonalAnime()
-        loadPopularAllTimeAnime()
-        loadRecommendations()
+        viewModelScope.launch {
+            _isLoading.value = true
+            Log.d(TAG, "refreshAllData: Setting loading state to true")
+
+            try {
+                if (!authManager.isLoggedIn()) {
+                    // For non-logged-in users, load public data
+                    Log.d(TAG, "refreshAllData: User not logged in, loading public data only")
+
+                    Log.d(TAG, "refreshAllData: Loading trending anime")
+                    loadTrendingAnime(true) // Use detailed logging
+
+                    Log.d(TAG, "refreshAllData: Loading seasonal anime")
+                    loadPopularSeasonalAnime(true) // Use detailed logging
+
+                    Log.d(TAG, "refreshAllData: Loading all-time popular anime")
+                    loadPopularAllTimeAnime(true) // Use detailed logging
+                } else {
+                    // For logged-in users, load everything
+                    Log.d(TAG, "refreshAllData: User logged in, loading all data")
+
+                    Log.d(TAG, "refreshAllData: Loading user profile")
+                    loadUserProfile(true) // Use detailed logging
+
+                    Log.d(TAG, "refreshAllData: Loading user collection")
+                    loadUserCollection(true) // Use detailed logging
+
+                    Log.d(TAG, "refreshAllData: Loading trending anime")
+                    loadTrendingAnime(true) // Use detailed logging
+
+                    Log.d(TAG, "refreshAllData: Loading seasonal anime")
+                    loadPopularSeasonalAnime(true) // Use detailed logging
+
+                    Log.d(TAG, "refreshAllData: Loading all-time popular anime")
+                    loadPopularAllTimeAnime(true) // Use detailed logging
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in refreshAllData: ${e.message}", e)
+                _errorMessage.value = "Error refreshing data: ${e.message}"
+            } finally {
+                Log.d(TAG, "refreshAllData: Setting loading state to false")
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Try to load real data from the API, return true if successful
+     */
+    private suspend fun tryLoadRealData(): Boolean {
+        try {
+            // Try to load trending anime
+            val trending = apiClient?.getTrendingAnime()
+            if (trending != null && trending.isNotEmpty()) {
+                // Success! Use this data
+                _trendingAnime.value = trending
+
+                // Wait a long time before next request (10 seconds)
+                kotlinx.coroutines.delay(10000)
+
+                // Try to load seasonal anime
+                val seasonal = apiClient?.getPopularSeasonalAnime()
+                if (seasonal != null) {
+                    _popularSeasonalAnime.value = seasonal
+                }
+
+                // Wait again
+                kotlinx.coroutines.delay(10000)
+
+                // Try for popular all-time
+                val popular = apiClient?.getPopularAllTimeAnime()
+                if (popular != null) {
+                    _popularAllTimeAnime.value = popular
+                }
+
+                return true
+            }
+            return false
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading real data: ${e.message}")
+            return false
+        }
+    }
+
+    /**
+     * Load mock anime data when API fails
+     */
+    private fun loadMockData() {
+        Log.d(TAG, "loadMockData: Loading mock anime data")
+
+        // Create and load mock trending anime
+        val mockTrending = createMockAnimeList("Trending", 10)
+        _trendingAnime.value = mockTrending
+
+        // Mock seasonal anime
+        val mockSeasonal = createMockAnimeList("Spring 2025", 10)
+        _popularSeasonalAnime.value = mockSeasonal
+
+        // Mock all-time popular
+        val mockPopular = createMockAnimeList("Popular", 10)
+        _popularAllTimeAnime.value = mockPopular
+
+        // If user is logged in, create some mock user lists
+        if (authManager.isLoggedIn()) {
+            val mockWatching = createMockAnimeList("Watching", 5)
+            _watchingAnime.value = mockWatching
+
+            val mockPlanToWatch = createMockAnimeList("Plan to Watch", 5)
+            _planToWatchAnime.value = mockPlanToWatch
+        }
+    }
+
+    /**
+     * Create a list of mock anime for testing
+     */
+    private fun createMockAnimeList(prefix: String, count: Int): List<AniListMedia> {
+        val result = mutableListOf<AniListMedia>()
+        for (i in 1..count) {
+            result.add(
+                AniListMedia(
+                    id = i * 1000,
+                    titleRomaji = "$prefix Anime $i",
+                    titleEnglish = "$prefix Show $i",
+                    titleNative = "$prefix アニメ $i",
+                    coverImageLarge = "https://via.placeholder.com/225x350?text=Anime+$i",
+                    coverImageMedium = "https://via.placeholder.com/112x175?text=Anime+$i",
+                    bannerImage = "https://via.placeholder.com/1000x300?text=Banner+$i",
+                    description = "This is a mock anime description for testing purposes when the API is unavailable due to rate limiting.",
+                    episodes = (i * 3 + 10),
+                    format = "TV",
+                    genres = listOf("Action", "Adventure", "Fantasy", "Comedy"),
+                    status = AniListMediaStatus.RELEASING,
+                    averageScore = (65 + i * 2),
+                    popularity = 1000 * i,
+                    seasonYear = 2025
+                )
+            )
+        }
+        return result
+    }
+
+    /**
+     * Load user collection and then recommendations sequentially
+     */
+    private suspend fun loadUserCollectionSequentially() {
+        try {
+            // Load user profile first
+            val user = apiClient?.getCurrentUser()
+            _userProfile.value = user
+
+            // Wait before next request
+            kotlinx.coroutines.delay(1000)
+
+            // Load collection
+            val collection = apiClient?.getUserAnimeCollection()
+            _animeCollection.value = collection
+
+            // Update the categorized lists
+            collection?.let {
+                _watchingAnime.value = it.getWatching()
+                _planToWatchAnime.value = it.getPlanToWatch()
+                _completedAnime.value = it.getCompleted()
+            }
+
+            // Wait before next request
+            kotlinx.coroutines.delay(2000)
+
+            // Load trending anime
+            val trending = apiClient?.getTrendingAnime()
+            _trendingAnime.value = trending ?: emptyList()
+
+            // Wait before next request
+            kotlinx.coroutines.delay(2000)
+
+            // Load seasonal anime
+            val seasonal = apiClient?.getPopularSeasonalAnime()
+            _popularSeasonalAnime.value = seasonal ?: emptyList()
+
+            // Wait before next request
+            kotlinx.coroutines.delay(2000)
+
+            // Load all-time popular anime
+            val popular = apiClient?.getPopularAllTimeAnime()
+            _popularAllTimeAnime.value = popular ?: emptyList()
+
+            // Wait before recommendations
+            kotlinx.coroutines.delay(1000)
+
+            // Load recommendations if possible
+            val watching = _watchingAnime.value
+            if (!watching.isNullOrEmpty()) {
+                val recommendations = apiClient?.getAnimeRecommendations(watching[0].id)
+                _recommendations.value = recommendations ?: emptyList()
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading user data sequentially", e)
+            _errorMessage.value = "Error loading user data: ${e.message}"
+        }
     }
 
     /**
      * Load user profile
      */
-    private fun loadUserProfile() {
+    private fun loadUserProfile(detailedLogs: Boolean = false) {
         viewModelScope.launch {
             try {
                 _isLoading.value = true
+                if (detailedLogs) Log.d(TAG, "loadUserProfile: Starting to load user profile")
+
                 val user = apiClient?.getCurrentUser()
+                if (detailedLogs) Log.d(TAG, "loadUserProfile: Received user data: ${user != null}")
+
                 _userProfile.value = user
+                if (detailedLogs) Log.d(TAG, "loadUserProfile: Updated _userProfile LiveData")
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading user profile", e)
+                Log.e(TAG, "Error loading user profile: ${e.message}", e)
                 _errorMessage.value = "Error loading profile: ${e.message}"
             } finally {
                 _isLoading.value = false
+                if (detailedLogs) Log.d(TAG, "loadUserProfile: Finished loading user profile")
             }
         }
     }
@@ -198,24 +400,40 @@ class AniListViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Load user's anime collection
      */
-    private fun loadUserCollection() {
+    private fun loadUserCollection(detailedLogs: Boolean = false) {
         viewModelScope.launch {
             try {
                 _isLoading.value = true
+                if (detailedLogs) Log.d(TAG, "loadUserCollection: Starting to load user collection")
+
                 val collection = apiClient?.getUserAnimeCollection()
+                if (detailedLogs) Log.d(TAG, "loadUserCollection: Received collection data: ${collection != null}")
+
                 _animeCollection.value = collection
+                if (detailedLogs) Log.d(TAG, "loadUserCollection: Updated _animeCollection LiveData")
 
                 // Update the categorized lists
                 collection?.let {
-                    _watchingAnime.value = it.getWatching()
-                    _planToWatchAnime.value = it.getPlanToWatch()
-                    _completedAnime.value = it.getCompleted()
+                    val watching = it.getWatching()
+                    if (detailedLogs) Log.d(TAG, "loadUserCollection: Got ${watching.size} watching anime")
+                    _watchingAnime.value = watching
+
+                    val planning = it.getPlanToWatch()
+                    if (detailedLogs) Log.d(TAG, "loadUserCollection: Got ${planning.size} plan-to-watch anime")
+                    _planToWatchAnime.value = planning
+
+                    val completed = it.getCompleted()
+                    if (detailedLogs) Log.d(TAG, "loadUserCollection: Got ${completed.size} completed anime")
+                    _completedAnime.value = completed
+
+                    if (detailedLogs) Log.d(TAG, "loadUserCollection: Updated categorized lists in LiveData")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading anime collection", e)
+                Log.e(TAG, "Error loading anime collection: ${e.message}", e)
                 _errorMessage.value = "Error loading collection: ${e.message}"
             } finally {
                 _isLoading.value = false
+                if (detailedLogs) Log.d(TAG, "loadUserCollection: Finished loading user collection")
             }
         }
     }
@@ -223,17 +441,24 @@ class AniListViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Load trending anime
      */
-    private fun loadTrendingAnime() {
+    private fun loadTrendingAnime(detailedLogs: Boolean = false) {
         viewModelScope.launch {
             try {
+                if (detailedLogs) Log.d(TAG, "loadTrendingAnime: Starting to load trending anime")
                 _isLoading.value = true
+
+                if (detailedLogs) Log.d(TAG, "loadTrendingAnime: API client null? ${apiClient == null}")
                 val trending = apiClient?.getTrendingAnime()
+                if (detailedLogs) Log.d(TAG, "loadTrendingAnime: Received ${trending?.size ?: 0} trending anime items")
+
                 _trendingAnime.value = trending ?: emptyList()
+                if (detailedLogs) Log.d(TAG, "loadTrendingAnime: Updated _trendingAnime LiveData with ${trending?.size ?: 0} items")
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading trending anime", e)
+                Log.e(TAG, "Error loading trending anime: ${e.message}", e)
                 _errorMessage.value = "Error loading trending anime: ${e.message}"
             } finally {
                 _isLoading.value = false
+                if (detailedLogs) Log.d(TAG, "loadTrendingAnime: Finished loading trending anime")
             }
         }
     }
@@ -241,17 +466,24 @@ class AniListViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Load popular anime from the current season
      */
-    private fun loadPopularSeasonalAnime() {
+    private fun loadPopularSeasonalAnime(detailedLogs: Boolean = false) {
         viewModelScope.launch {
             try {
+                if (detailedLogs) Log.d(TAG, "loadPopularSeasonalAnime: Starting to load seasonal anime")
                 _isLoading.value = true
+
+                if (detailedLogs) Log.d(TAG, "loadPopularSeasonalAnime: API client null? ${apiClient == null}")
                 val seasonal = apiClient?.getPopularSeasonalAnime()
+                if (detailedLogs) Log.d(TAG, "loadPopularSeasonalAnime: Received ${seasonal?.size ?: 0} seasonal anime items")
+
                 _popularSeasonalAnime.value = seasonal ?: emptyList()
+                if (detailedLogs) Log.d(TAG, "loadPopularSeasonalAnime: Updated _popularSeasonalAnime LiveData with ${seasonal?.size ?: 0} items")
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading seasonal anime", e)
+                Log.e(TAG, "Error loading seasonal anime: ${e.message}", e)
                 _errorMessage.value = "Error loading seasonal anime: ${e.message}"
             } finally {
                 _isLoading.value = false
+                if (detailedLogs) Log.d(TAG, "loadPopularSeasonalAnime: Finished loading seasonal anime")
             }
         }
     }
@@ -259,146 +491,94 @@ class AniListViewModel(application: Application) : AndroidViewModel(application)
     /**
      * Load all-time popular anime
      */
-    private fun loadPopularAllTimeAnime() {
+    private fun loadPopularAllTimeAnime(detailedLogs: Boolean = false) {
         viewModelScope.launch {
             try {
+                if (detailedLogs) Log.d(TAG, "loadPopularAllTimeAnime: Starting to load all-time popular anime")
                 _isLoading.value = true
+
+                if (detailedLogs) Log.d(TAG, "loadPopularAllTimeAnime: API client null? ${apiClient == null}")
                 val popular = apiClient?.getPopularAllTimeAnime()
+                if (detailedLogs) Log.d(TAG, "loadPopularAllTimeAnime: Received ${popular?.size ?: 0} all-time popular anime items")
+
                 _popularAllTimeAnime.value = popular ?: emptyList()
+                if (detailedLogs) Log.d(TAG, "loadPopularAllTimeAnime: Updated _popularAllTimeAnime LiveData with ${popular?.size ?: 0} items")
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading all-time popular anime", e)
+                Log.e(TAG, "Error loading all-time popular anime: ${e.message}", e)
                 _errorMessage.value = "Error loading popular anime: ${e.message}"
             } finally {
                 _isLoading.value = false
+                if (detailedLogs) Log.d(TAG, "loadPopularAllTimeAnime: Finished loading all-time popular anime")
             }
         }
     }
 
     /**
-     * Load recommendations based on watching list or specific anime
+     * Try to refresh the API client and execute the given API call
      */
-    private fun loadRecommendations(animeId: Int? = null) {
-        viewModelScope.launch {
-            try {
-                _isLoading.value = true
+    private suspend fun <T> refreshAndExecute(
+        apiCall: suspend () -> T?,
+        onSuccess: (T) -> Unit,
+        errorMessage: String = "API call failed",
+        maxRetries: Int = 1
+    ) {
+        var retries = 0
+        var success = false
 
-                if (animeId != null) {
-                    val recommendations = apiClient?.getAnimeRecommendations(animeId)
-                    _recommendations.value = recommendations ?: emptyList()
+        while (!success && retries <= maxRetries) {
+            try {
+                // Check if we need to refresh API client
+                if (apiClient == null || authManager.tokenWillExpireSoon()) {
+                    Log.d(TAG, "API client needs initialization or token refresh")
+                    initApiClient()
+                }
+
+                // Execute the API call
+                val result = apiCall()
+
+                if (result != null) {
+                    onSuccess(result)
+                    success = true
                 } else {
-                    // If no specific anime ID, use the first from watching if available
-                    val watching = _watchingAnime.value
-                    if (!watching.isNullOrEmpty()) {
-                        val recommendations = apiClient?.getAnimeRecommendations(watching[0].id)
-                        _recommendations.value = recommendations ?: emptyList()
+                    Log.e(TAG, "API call returned null result")
+                    retries++
+
+                    if (retries <= maxRetries) {
+                        Log.d(TAG, "Retrying API call (attempt $retries of $maxRetries)")
+                        // Force token refresh on retry
+                        authManager.getAccessToken()
+                        initApiClient()
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading recommendations", e)
-                _errorMessage.value = "Error loading recommendations: ${e.message}"
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
+                Log.e(TAG, "Error in API call: ${e.message}")
+                retries++
 
-    /**
-     * Update an anime's progress
-     */
-    fun updateProgress(mediaId: Int, progress: Int) {
-        viewModelScope.launch {
-            try {
-                _isLoading.value = true
-
-                val success = apiClient?.updateAnimeEntry(
-                    mediaId = mediaId,
-                    progress = progress
-                ) ?: false
-
-                if (success) {
-                    // Refresh the collection data to reflect changes
-                    loadUserCollection()
+                if (retries <= maxRetries) {
+                    Log.d(TAG, "Retrying API call after error (attempt $retries of $maxRetries)")
+                    // Force token refresh on error
+                    authManager.getAccessToken()
+                    initApiClient()
                 } else {
-                    _errorMessage.value = "Failed to update progress"
+                    _errorMessage.value = "$errorMessage: ${e.message}"
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error updating progress", e)
-                _errorMessage.value = "Error updating progress: ${e.message}"
-            } finally {
-                _isLoading.value = false
             }
+        }
+
+        if (!success) {
+            _errorMessage.value = errorMessage
         }
     }
 
-    /**
-     * Update an anime's status (e.g., move from Planning to Watching)
-     */
-    fun updateStatus(mediaId: Int, status: AniListUserMediaStatus) {
-        viewModelScope.launch {
-            try {
-                _isLoading.value = true
-
-                val success = apiClient?.updateAnimeEntry(
-                    mediaId = mediaId,
-                    status = when (status) {
-                        AniListUserMediaStatus.CURRENT -> AniListMediaStatus.RELEASING
-                        AniListUserMediaStatus.PLANNING -> AniListMediaStatus.NOT_YET_RELEASED
-                        AniListUserMediaStatus.COMPLETED -> AniListMediaStatus.FINISHED
-                        AniListUserMediaStatus.DROPPED -> AniListMediaStatus.CANCELLED
-                        AniListUserMediaStatus.PAUSED -> AniListMediaStatus.HIATUS
-                        AniListUserMediaStatus.REPEATING -> AniListMediaStatus.RELEASING
-                    }
-                ) ?: false
-
-                if (success) {
-                    // Refresh the collection data to reflect changes
-                    loadUserCollection()
-                } else {
-                    _errorMessage.value = "Failed to update status"
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error updating status", e)
-                _errorMessage.value = "Error updating status: ${e.message}"
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    /**
-     * Search for anime by name
-     */
-    fun searchAnime(query: String, callback: (List<AniListMedia>) -> Unit) {
-        viewModelScope.launch {
-            try {
-                _isLoading.value = true
-                val results = apiClient?.searchAnime(query) ?: emptyList()
-                callback(results)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error searching anime", e)
-                _errorMessage.value = "Error searching anime: ${e.message}"
-                callback(emptyList())
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    /**
-     * Load recommendations for a specific anime ID
-     */
-    fun searchRecommendations(animeId: Int) {
-        viewModelScope.launch {
-            try {
-                _isLoading.value = true
-                val recommendations = apiClient?.getAnimeRecommendations(animeId) ?: emptyList()
-                _recommendations.value = recommendations
-            } catch (e: Exception) {
-                Log.e(TAG, "Error loading recommendations for anime $animeId", e)
-                _errorMessage.value = "Error loading recommendations: ${e.message}"
-            } finally {
-                _isLoading.value = false
-            }
+    // Initialize or reinitialize the API client with the current token
+    private fun initApiClient() {
+        val token = authManager.getAccessToken()
+        if (token != null) {
+            apiClient = AniListApiClient(token)
+            Log.d(TAG, "API client initialized with token")
+        } else {
+            apiClient = null
+            Log.d(TAG, "No token available, API client not initialized")
         }
     }
 
@@ -459,6 +639,133 @@ class AniListViewModel(application: Application) : AndroidViewModel(application)
                 _categoryAnimeList.value = emptyList()
             } finally {
                 _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Update an anime's progress
+     */
+    fun updateProgress(mediaId: Int, progress: Int) {
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                Log.d(TAG, "Updating progress for anime $mediaId to episode $progress")
+
+                // Make sure we have a valid API client
+                if (apiClient == null) {
+                    apiClient = AniListApiClient(authManager.getAccessToken())
+                }
+
+                val success = apiClient?.updateAnimeEntry(
+                    mediaId = mediaId,
+                    progress = progress
+                ) ?: false
+
+                if (success) {
+                    Log.d(TAG, "Successfully updated progress for anime $mediaId")
+                    // Refresh the collection data to reflect changes
+                    loadUserCollection()
+                } else {
+                    Log.e(TAG, "Failed to update progress for anime $mediaId")
+                    _errorMessage.value = "Failed to update progress"
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating progress: ${e.message}", e)
+                _errorMessage.value = "Error updating progress: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Update an anime's status in the user's collection
+     */
+    fun updateStatus(mediaId: Int, status: AniListUserMediaStatus) {
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                Log.d(TAG, "Updating status for anime $mediaId to $status")
+
+                // Make sure we have a valid API client
+                if (apiClient == null) {
+                    apiClient = AniListApiClient(authManager.getAccessToken())
+                }
+
+                // Convert AniListUserMediaStatus to AniListMediaStatus if needed
+                // Note: For now we're assuming they match by name. If they don't, we need to map them.
+                val success = apiClient?.updateAnimeEntry(
+                    mediaId = mediaId,
+                    status = com.blank.anime.model.AniListMediaStatus.valueOf(status.name)
+                ) ?: false
+
+                if (success) {
+                    Log.d(TAG, "Successfully updated status for anime $mediaId to $status")
+                    // Refresh the collection data to reflect changes
+                    loadUserCollection()
+                } else {
+                    Log.e(TAG, "Failed to update status for anime $mediaId")
+                    _errorMessage.value = "Failed to update anime status"
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating anime status: ${e.message}", e)
+                _errorMessage.value = "Error updating status: ${e.message}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Search for anime by name
+     */
+    fun searchAnime(query: String, callback: (List<AniListMedia>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                Log.d(TAG, "searchAnime: Searching for anime with query: $query")
+
+                // Make sure we have a valid API client
+                if (apiClient == null) {
+                    apiClient = AniListApiClient(authManager.getAccessToken())
+                    Log.d(TAG, "searchAnime: Created new API client")
+                }
+
+                val results = apiClient?.searchAnime(query) ?: emptyList()
+                Log.d(TAG, "searchAnime: Found ${results.size} results")
+
+                callback(results)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error searching anime: ${e.message}", e)
+                _errorMessage.value = "Error searching anime: ${e.message}"
+                callback(emptyList())
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Search for anime recommendations based on the given anime ID
+     */
+    fun searchRecommendations(animeId: Int) {
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                Log.d(TAG, "searchRecommendations: Starting to load recommendations for anime ID: $animeId")
+
+                val recommendations = apiClient?.getAnimeRecommendations(animeId)
+                Log.d(TAG, "searchRecommendations: Received ${recommendations?.size ?: 0} recommendations")
+
+                _recommendations.value = recommendations ?: emptyList()
+                Log.d(TAG, "searchRecommendations: Updated _recommendations LiveData with ${recommendations?.size ?: 0} items")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading recommendations: ${e.message}", e)
+                _errorMessage.value = "Error loading recommendations: ${e.message}"
+            } finally {
+                _isLoading.value = false
+                Log.d(TAG, "searchRecommendations: Finished loading recommendations")
             }
         }
     }

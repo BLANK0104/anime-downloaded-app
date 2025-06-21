@@ -57,26 +57,47 @@ class EpisodeAdapter(
                 }
             }
 
-            // Set download button text based on download state
-            if (episode.isDownloaded) {
-                downloadButton.text = "Play"
+            // Handle episode availability
+            if (!episode.isAvailable) {
+                // If episode isn't available yet, show it as "Coming Soon"
+                downloadButton.text = "Coming Soon"
+                downloadButton.isEnabled = false
+                downloadButton.alpha = 0.5f
                 downloadButton.setCompoundDrawablesWithIntrinsicBounds(
-                    R.drawable.ic_play, 0, 0, 0
+                    R.drawable.ic_timer, 0, 0, 0
                 )
+
+                // Mark the whole item as partially disabled
+                itemView.alpha = 0.7f
+                itemView.isClickable = false
             } else {
-                downloadButton.text = "Download"
-                downloadButton.setCompoundDrawablesWithIntrinsicBounds(
-                    R.drawable.ic_download, 0, 0, 0
-                )
-            }
+                // Reset alpha for available episodes
+                itemView.alpha = 1.0f
+                itemView.isClickable = true
+                downloadButton.isEnabled = true
+                downloadButton.alpha = 1.0f
 
-            // Set click listeners
-            itemView.setOnClickListener {
-                onEpisodeClick(episode)
-            }
+                // Set download button text based on download state
+                if (episode.isDownloaded) {
+                    downloadButton.text = "Play"
+                    downloadButton.setCompoundDrawablesWithIntrinsicBounds(
+                        R.drawable.ic_play, 0, 0, 0
+                    )
+                } else {
+                    downloadButton.text = "Download"
+                    downloadButton.setCompoundDrawablesWithIntrinsicBounds(
+                        R.drawable.ic_download, 0, 0, 0
+                    )
+                }
 
-            downloadButton.setOnClickListener {
-                onDownloadClick(episode)
+                // Set click listeners
+                itemView.setOnClickListener {
+                    onEpisodeClick(episode)
+                }
+
+                downloadButton.setOnClickListener {
+                    onDownloadClick(episode)
+                }
             }
         }
     }
