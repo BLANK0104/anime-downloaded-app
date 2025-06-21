@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.cardview.widget.CardView
+import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -1279,200 +1280,73 @@ class AnimeDetailsFragment : Fragment() {
 
     // Create the custom episode loading UI programmatically
     private fun createCustomEpisodeLoadingUI() {
+        // UI removed as requested
+        // Core functionality remains intact
         try {
-            // Check if the action_card exists in the layout
-            val actionCardView = view?.findViewById<View>(R.id.action_card) ?: return
+            // Create hidden inputs to maintain functionality without visible UI
+            // These will be used by the existing methods that reference them
 
-            // Create a CardView container
-            episodeLoadingCard = CardView(requireContext()).apply {
-                id = View.generateViewId()
-                layoutParams = ViewGroup.MarginLayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    val margin = resources.getDimensionPixelSize(R.dimen.card_margin) // Define this dimension in your resources
-                    setMargins(margin, margin, margin, margin)
-                }
-                radius = resources.getDimension(R.dimen.card_corner_radius) // Define this dimension in your resources
-                cardElevation = resources.getDimension(R.dimen.card_elevation) // Define this dimension in your resources
-            }
-
-            // Main container layout
-            val mainLayout = LinearLayout(requireContext()).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                orientation = LinearLayout.VERTICAL
-                val padding = resources.getDimensionPixelSize(R.dimen.padding_medium) // Define this dimension in your resources
-                setPadding(padding, padding, padding, padding)
-            }
-
-            // Title
-            val titleTextView = TextView(requireContext()).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                text = "Custom Episode Loading"
-                textSize = 16f
-                setTypeface(null, Typeface.BOLD)
-            }
-            mainLayout.addView(titleTextView)
-
-            // Episode range input layout
-            val rangeLayout = LinearLayout(requireContext()).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = resources.getDimensionPixelSize(R.dimen.spacing_normal) // Define this dimension in your resources
-                }
-                orientation = LinearLayout.HORIZONTAL
-            }
-
-            // Start episode input
-            val startLayout = LinearLayout(requireContext()).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f
-                ).apply {
-                    marginEnd = resources.getDimensionPixelSize(R.dimen.spacing_small) // Define this dimension in your resources
-                }
-                orientation = LinearLayout.VERTICAL
-            }
-
-            val startLabel = TextView(requireContext()).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                text = "Start Episode"
-            }
-            startLayout.addView(startLabel)
-
+            // Create invisible EditText fields for input storage
             startEpisodeInput = EditText(requireContext()).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                inputType = InputType.TYPE_CLASS_NUMBER
+                visibility = View.GONE
                 setText("1")
             }
-            startLayout.addView(startEpisodeInput)
-            rangeLayout.addView(startLayout)
-
-            // End episode input
-            val endLayout = LinearLayout(requireContext()).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f
-                )
-                orientation = LinearLayout.VERTICAL
-            }
-
-            val endLabel = TextView(requireContext()).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                text = "End Episode"
-            }
-            endLayout.addView(endLabel)
 
             endEpisodeInput = EditText(requireContext()).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                inputType = InputType.TYPE_CLASS_NUMBER
-                setText("10")
-            }
-            endLayout.addView(endEpisodeInput)
-            rangeLayout.addView(endLayout)
-
-            mainLayout.addView(rangeLayout)
-
-            // Quality and language buttons layout
-            val optionsLayout = LinearLayout(requireContext()).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = resources.getDimensionPixelSize(R.dimen.spacing_normal) // Define this dimension in your resources
-                }
-                orientation = LinearLayout.HORIZONTAL
+                visibility = View.GONE
+                setText("12")
             }
 
-            // Quality selection button
-            selectQualityButton = MaterialButton(requireContext(), null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f
-                ).apply {
-                    marginEnd = resources.getDimensionPixelSize(R.dimen.spacing_small)
-                }
+            // Create invisible buttons to maintain references
+            selectQualityButton = MaterialButton(requireContext()).apply {
+                visibility = View.GONE
                 text = "Quality: 1080p"
-                setOnClickListener { showQualitySelectionDialog() }
             }
-            optionsLayout.addView(selectQualityButton)
 
-            // Language selection button
-            selectLanguageButton = MaterialButton(requireContext(), null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f
-                )
+            selectLanguageButton = MaterialButton(requireContext()).apply {
+                visibility = View.GONE
                 text = "Language: Japanese"
-                setOnClickListener { showLanguageSelectionDialog() }
             }
-            optionsLayout.addView(selectLanguageButton)
 
-            mainLayout.addView(optionsLayout)
-
-            // Load episodes button
             loadEpisodesButton = MaterialButton(requireContext()).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = resources.getDimensionPixelSize(R.dimen.spacing_normal) // Define this dimension in your resources
-                }
-                text = "Load Episodes"
-                setOnClickListener { loadCustomEpisodes() }
+                visibility = View.GONE
             }
-            mainLayout.addView(loadEpisodesButton)
 
-            // Batch download button
             batchDownloadButton = MaterialButton(requireContext()).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    topMargin = resources.getDimensionPixelSize(R.dimen.spacing_normal) // Define this dimension in your resources
-                }
-                text = "Batch Download Episodes"
-                setOnClickListener { showBatchDownloadOptionsDialog() }
+                visibility = View.GONE
             }
-            mainLayout.addView(batchDownloadButton)
 
-            // Add all views to the card
-            episodeLoadingCard.addView(mainLayout)
+            // Create invisible card to maintain references
+            episodeLoadingCard = CardView(requireContext()).apply {
+                visibility = View.GONE
+            }
 
-            // Add the card to the parent layout after the action card
-            val parentLayout = actionCardView.parent as ViewGroup
-            val actionCardIndex = parentLayout.indexOfChild(actionCardView)
-            parentLayout.addView(episodeLoadingCard, actionCardIndex + 1)
+            // Add the invisible views to the root to keep them in the view hierarchy
+            val container = LinearLayout(requireContext()).apply {
+                visibility = View.GONE
+                addView(startEpisodeInput)
+                addView(endEpisodeInput)
+                addView(selectQualityButton)
+                addView(selectLanguageButton)
+                addView(loadEpisodesButton)
+                addView(batchDownloadButton)
+            }
 
-            Log.d("AnimeDetailsFragment", "Custom episode loading UI created successfully")
+            episodeLoadingCard.addView(container)
+
+            // Add to root but keep invisible
+            (binding.root as? ViewGroup)?.addView(episodeLoadingCard)
+
+            Log.d("AnimeDetailsFragment", "Custom episode UI references maintained but UI removed")
 
         } catch (e: Exception) {
-            Log.e("AnimeDetailsFragment", "Error creating custom episode loading UI", e)
+            Log.e("AnimeDetailsFragment", "Error setting up invisible references", e)
         }
+    }
+
+    // Create a simpler fallback UI if the fancy one fails
+    private fun createSimpleFallbackUI() {
+        // UI removed as requested
     }
 
     override fun onDestroyView() {
